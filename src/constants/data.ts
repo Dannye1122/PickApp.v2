@@ -5,6 +5,48 @@ export const USERS: Record<string, string> = {
     "STBLAN2": "666789"
 };
 
+export interface UserDepartmentConfig {
+    department: string;
+    zone: string;
+}
+
+export const USER_DEFAULT_DEPARTMENTS: Record<string, UserDepartmentConfig> = {
+    "MIABRUDAN": { department: "aisles", zone: "AMBIENT" }, // Aisles (300 / 350)
+    "DASERGHIE": { department: "aisles", zone: "AMBIENT" },
+    "ADMIN": { department: "aisles", zone: "AMBIENT" },
+    "STBLAN2": { department: "aisles", zone: "AMBIENT" }
+};
+
+export const getUserHomeDepartment = (username?: string, profile?: any): { department: string; zone: string } => {
+    const userUpper = (username || '').toUpperCase().trim();
+    
+    // 1. Check if profile specifies department
+    if (profile) {
+        const rawDept = profile.homeDepartment || profile.department;
+        if (rawDept) {
+            let zone = profile.zone;
+            if (!zone) {
+                if (rawDept.startsWith('produce_') || rawDept === 'chicken' || rawDept === 'mince' || rawDept === 'boxes' || rawDept.startsWith('long_life')) {
+                    zone = 'CHILLER';
+                } else if (rawDept === 'freezer') {
+                    zone = 'FREEZER';
+                } else {
+                    zone = 'AMBIENT';
+                }
+            }
+            return { department: rawDept, zone };
+        }
+    }
+    
+    // 2. Check predefined user defaults
+    if (userUpper && USER_DEFAULT_DEPARTMENTS[userUpper]) {
+        return USER_DEFAULT_DEPARTMENTS[userUpper];
+    }
+    
+    // 3. Global fallback: Aisles 300 / 350 (Ambient)
+    return { department: 'aisles', zone: 'AMBIENT' };
+};
+
 export const DEPT_LANES: Record<string, Record<string, string>> = {
     "ambient": { 
         "1": "471", "2": "314", "3": "779", "4": "700", "5": "768", "6": "521", "7": "775", "8": "380", "9": "576",

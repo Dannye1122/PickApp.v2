@@ -5,6 +5,9 @@ import { defineConfig, loadEnv } from 'vite';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
+  const buildDate = new Date().toISOString().split('T')[0];
+  const buildTime = new Date().toISOString();
+
   return {
     plugins: [
       react(),
@@ -12,6 +15,8 @@ export default defineConfig(({ mode }) => {
     ],
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+      '__BUILD_DATE__': JSON.stringify(buildDate),
+      '__BUILD_TIMESTAMP__': JSON.stringify(buildTime),
     },
     resolve: {
       alias: {

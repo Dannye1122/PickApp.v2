@@ -35,6 +35,9 @@ export interface UserProfile {
     achievements: string[];
     selectedSkin: string;
     warehouseId: string;
+    department?: string;
+    homeDepartment?: string;
+    zone?: string;
     hasSubmittedBetaFeedback?: boolean;
     rotaConfig?: any;
     rotaOverrides?: Record<string, string>;

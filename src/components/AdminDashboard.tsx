@@ -18,6 +18,7 @@ import { getMinutesUntilNextFetch } from '../utils/quotaManager';
 import { haptic } from '../services/hapticService';
 import { WarehouseSettings } from '../types';
 import { auth } from '../lib/firebase';
+import { APP_VERSION } from '../constants/version';
 
 // All selectable departments mapped with their Zones
 export const ALL_DEPARTMENTS_FLAT = [
@@ -335,7 +336,12 @@ export const AdminDashboard = ({
                             <ShieldAlert size={20} />
                         </div>
                         <div>
-                            <h2 className="text-[13px] font-black uppercase tracking-[0.2em] text-rose-500 font-display">ADMIN_COMMAND</h2>
+                            <div className="flex items-center gap-2">
+                                <h2 className="text-[13px] font-black uppercase tracking-[0.2em] text-rose-500 font-display">ADMIN_COMMAND</h2>
+                                <span className="text-[8px] font-mono font-bold text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded border border-rose-500/20">
+                                    v{APP_VERSION}
+                                </span>
+                            </div>
                             <p className="text-[8px] text-slate-500 uppercase font-black tracking-[0.3em] mt-0.5">ESTR_CORE_ACCESS_SECURED</p>
                         </div>
                     </div>

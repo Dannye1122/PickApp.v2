@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { ShieldCheck, User, Key, ArrowRight, Loader2, Fingerprint, Sparkles } from 'lucide-react';
 import { Logo, Catchphrase } from './branding/Logo';
 import { ThemeColors } from '../types';
+import { APP_VERSION } from '../constants/version';
 import { haptic } from '../services/hapticService';
 import { playAlertSound } from '../services/audioService';
 
@@ -129,6 +130,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                         <span className="text-emerald-500 text-[10px] font-black underline">DETAILS</span>
                     </motion.div>
                 )}
+
+                <div className="mt-8 text-center">
+                    <span className="text-[10px] font-mono font-bold text-slate-600 tracking-wider">
+                        v{APP_VERSION}
+                    </span>
+                </div>
             </motion.div>
         </div>
     );

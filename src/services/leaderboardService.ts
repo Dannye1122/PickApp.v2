@@ -27,6 +27,7 @@ import { STORES, getLocalItem, saveLocalItem, saveLocalItems, getAllLocalItems, 
 
 import { UserRole, UserProfile } from '../types';
 import { getDailyAIBots, getDailyAILiveUsers } from '../utils/botGenerator';
+import { getUserHomeDepartment } from '../constants/data';
 
 export enum OperationType {
   CREATE = 'create',
@@ -1266,13 +1267,17 @@ export const createUserWithAuthAndProfile = async (username: string, pin: string
     const uid = authResult.user.uid;
     
     // Save profile with this registration UID
+    const homeDept = getUserHomeDepartment(userUpper);
     await saveUserProfile(uid, userUpper, pin, {
       role,
       level: 1,
       xp: 0,
       achievements: [],
       selectedSkin: 'classic',
-      warehouseId: currentWarehouseId
+      warehouseId: currentWarehouseId,
+      department: homeDept.department,
+      homeDepartment: homeDept.department,
+      zone: homeDept.zone
     });
     
     return { success: true, uid };

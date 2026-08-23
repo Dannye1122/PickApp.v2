@@ -58,9 +58,21 @@ import { OnboardingModal } from './components/OnboardingModal';
 import { AboutPickApp } from './components/AboutPickApp';
 import { AboutDeveloper } from './components/AboutDeveloper';
 import { InviteModal } from './components/InviteModal';
+import { 
+    ClockInModal, 
+    AdminPinModal, 
+    RestoreShiftModal, 
+    OrderFinishModal,
+    RotaOverrideModal,
+    HistoricalShiftModal,
+    ShiftSummaryModal,
+    CaseUnlockModal,
+    ConfirmDialogModal,
+    InstallTutorialModal
+} from './components/modals';
 import { ShiftData, ThemeColors, LeaderboardEntry, UserRole, UserProfile, WarehouseSettings } from './types';
 import { THEMES, SKIN_REQUIREMENTS } from './constants/themes';
-import { USERS, DEPT_LANES, DEPARTMENTS, ACHIEVEMENT_DATA, DUO_MESSAGES } from './constants/data';
+import { USERS, DEPT_LANES, DEPARTMENTS, ACHIEVEMENT_DATA, DUO_MESSAGES, getUserHomeDepartment } from './constants/data';
 import { usePerformanceStats } from './hooks/usePerformanceStats';
 import { playAlertSound, playVictorySound, playGentleBeep, getAudioContext } from './services/audioService';
 import { haptic as deviceHapticService, setHapticsEnabled, isVibrationSupported } from './services/hapticService';
@@ -208,12 +220,22 @@ const processLoadedData = (parsed: any, defaultValues: any) => {
         }
     }
     
-    // Ensure default department is 'aisles' (Aisles 300 / 350) and zone is 'AMBIENT'
-    if (!parsed.department) {
-        parsed.department = 'aisles';
-    }
-    if (!parsed.zone) {
-        parsed.zone = 'AMBIENT';
+    // Resolve user's home department (e.g. MIABRUDAN -> Aisles 300 / 350)
+    const op = parsed.operator || defaultValues.operator || '';
+    const homeDept = getUserHomeDepartment(op);
+
+    // If shift is fresh, finalized, or not actively picking, start with home department
+    const isActivelyPicking = Boolean(parsed.isPicking);
+    if (!isActivelyPicking && (!parsed.history || parsed.history.length === 0 || parsed.isShiftFinalized)) {
+        parsed.department = homeDept.department;
+        parsed.zone = homeDept.zone;
+    } else {
+        if (!parsed.department) {
+            parsed.department = homeDept.department;
+        }
+        if (!parsed.zone) {
+            parsed.zone = homeDept.zone;
+        }
     }
 
     // Force voiceEnabled to false on app startup to prevent microphone activation without explicit consent
@@ -634,22 +656,28 @@ export default function App() {
                     }
                     setUserProfile(p);
 
-                    // Sync Firestore rotaOverrides and rotaConfig into local state
-                    if (p.rotaOverrides || p.rotaConfig) {
-                        setShiftData((prev: any) => {
-                            const nextOverrides = { ...(prev.rotaOverrides || {}), ...(p.rotaOverrides || {}) };
-                            const nextConfig = p.rotaConfig ? { ...prev.rotaConfig, ...p.rotaConfig } : prev.rotaConfig;
-                            const updated = {
-                                ...prev,
-                                rotaConfig: nextConfig,
-                                rotaOverrides: nextOverrides
-                            };
-                            const opName = (prev.operator || localStorage.getItem('lastUser') || 'default').toUpperCase().trim();
-                            safeLocalStorage.setItem(`pickData_${opName}`, JSON.stringify(updated), true);
-                            saveLocalRota(opName, nextConfig, nextOverrides);
-                            return updated;
-                        });
-                    }
+                    // Sync Firestore profile, home department, and rota into local state
+                    const homeDept = getUserHomeDepartment(userUpper, p);
+                    setShiftData((prev: any) => {
+                        const isActivelyPicking = Boolean(prev.isPicking);
+                        const shouldApplyHomeDept = !isActivelyPicking && (!prev.history || prev.history.length === 0 || prev.isShiftFinalized || !prev.department);
+                        const nextDept = shouldApplyHomeDept ? homeDept.department : (prev.department || homeDept.department);
+                        const nextZone = shouldApplyHomeDept ? homeDept.zone : (prev.zone || homeDept.zone);
+
+                        const nextOverrides = { ...(prev.rotaOverrides || {}), ...(p.rotaOverrides || {}) };
+                        const nextConfig = p.rotaConfig ? { ...prev.rotaConfig, ...p.rotaConfig } : prev.rotaConfig;
+                        const updated = {
+                            ...prev,
+                            department: nextDept,
+                            zone: nextZone,
+                            rotaConfig: nextConfig,
+                            rotaOverrides: nextOverrides
+                        };
+                        const opName = (prev.operator || localStorage.getItem('lastUser') || 'default').toUpperCase().trim();
+                        safeLocalStorage.setItem(`pickData_${opName}`, JSON.stringify(updated), true);
+                        saveLocalRota(opName, nextConfig, nextOverrides);
+                        return updated;
+                    });
                 } else {
                     // Profile does not exist in Firestore! Auto-provision it to prevent permission/query issues
                     const operatorName = shiftData.operator || localStorage.getItem('lastUser') || 'DASERGHIE';
@@ -3297,10 +3325,13 @@ export default function App() {
         }
         
         try {
+            const opName = finalData.operator || shiftData.operator || '';
+            const homeDept = getUserHomeDepartment(opName, userProfile);
             const nextData = {
                ...defaultShiftData,
-               operator: finalData.operator,
-               department: finalData.department,
+               operator: opName,
+               department: homeDept.department,
+               zone: homeDept.zone,
                haptic: finalData.haptic,
                voiceEnabled: finalData.voiceEnabled,
                selectedSkin: finalData.selectedSkin,
@@ -3708,6 +3739,9 @@ export default function App() {
                                 <h1 className="text-2xl sm:text-3xl font-black italic tracking-tight text-white leading-none">
                                     <span className="bg-gradient-to-r from-white via-slate-100 to-emerald-400 bg-clip-text text-transparent drop-shadow-sm">PickApp</span>
                                 </h1>
+                                <span className="text-[9px] font-mono font-bold text-slate-500 bg-slate-800/80 px-1.5 py-0.5 rounded border border-slate-700/60 not-italic">
+                                    v{APP_VERSION}
+                                </span>
                                 <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider px-2.5 py-0.5 rounded-lg bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-sm not-italic">
                                     {currentDept?.name || 'Aisles'}
                                 </span>
@@ -4351,7 +4385,12 @@ export default function App() {
                                             <Settings size={18} className="animate-spin-slow" />
                                         </div>
                                         <div>
-                                            <h3 className="text-base font-black text-white italic tracking-tight">ENGINE ROOM</h3>
+                                            <div className="flex items-center gap-2">
+                                                <h3 className="text-base font-black text-white italic tracking-tight">ENGINE ROOM</h3>
+                                                <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700/60">
+                                                    v{APP_VERSION}
+                                                </span>
+                                            </div>
                                             <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">System Configuration</p>
                                         </div>
                                     </div>
@@ -5307,51 +5346,21 @@ export default function App() {
                     )}
                 </AnimatePresence>
 
-                    {showClockInModal && (
-                        <div className="fixed inset-0 bg-slate-950/90 z-[100] flex items-center justify-center p-6 backdrop-blur-md">
-                            <div className="bg-slate-900 w-full max-w-sm rounded-[32px] p-6 border border-slate-800 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-                                <div className="text-center mb-6">
-                                    <div className={`w-12 h-12 rounded-2xl ${manualClockType === 'in' ? 'bg-slate-800 text-emerald-400' : 'bg-orange-500/20 text-orange-400'} flex items-center justify-center mx-auto mb-3`}>
-                                        <Clock size={24} />
-                                    </div>
-                                    <h3 className="text-xl font-bold text-white mb-1">Manual Clock {manualClockType === 'in' ? 'In' : 'Out'}</h3>
-                                    <p className="text-slate-400 text-xs text-balance">
-                                        {manualClockType === 'in' 
-                                            ? 'Input the time you actually clocked in to start your shift tracking.'
-                                            : 'Update the time you finished your shift for final stats calculation.'}
-                                    </p>
-                                </div>
-                                
-                                <input 
-                                    type="time" 
-                                    className={`w-full bg-slate-950 border-2 border-slate-800 text-white p-5 rounded-2xl text-4xl font-light text-center outline-none ${theme.borderFocusLarge} mb-6 [color-scheme:dark]`}
-                                    value={manualClockTime}
-                                    onChange={e => setManualClockTime(e.target.value)}
-                                />
-
-                                <div className="grid grid-cols-2 gap-3">
-                                    <button 
-                                        className="py-4 bg-slate-800 text-slate-400 rounded-2xl font-bold text-sm tracking-wide hover:text-white"
-                                        onClick={() => { haptic('light'); setShowClockInModal(false); }}
-                                    >
-                                        CANCEL
-                                    </button>
-                                    <button 
-                                        className={`py-4 ${theme.bg} text-white rounded-2xl font-bold text-sm tracking-wide ${theme.bgHover}`}
-                                        onClick={() => {
-                                            if (manualClockType === 'in') {
-                                                manualStart(manualClockTime);
-                                            } else {
-                                                manualEnd(manualClockTime);
-                                            }
-                                        }}
-                                    >
-                                        {manualClockType === 'in' ? 'START' : 'FINISH'}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
+                    <ClockInModal 
+                        isOpen={showClockInModal}
+                        onClose={() => setShowClockInModal(false)}
+                        manualClockType={manualClockType}
+                        manualClockTime={manualClockTime}
+                        setManualClockTime={setManualClockTime}
+                        theme={theme}
+                        onConfirm={(type, time) => {
+                            if (type === 'in') {
+                                manualStart(time);
+                            } else {
+                                manualEnd(time);
+                            }
+                        }}
+                    />
                     {showLeaderboard && (
                         <div className="fixed inset-0 bg-slate-950/80 z-[100] flex flex-col justify-end backdrop-blur-sm transition-all">
                             <div className={`${theme.panel} ${theme.radius} p-6 border shadow-2xl animate-in slide-in-from-bottom-full duration-200 h-[85vh] flex flex-col`}>
@@ -6299,680 +6308,52 @@ export default function App() {
                             </div>
 
                             {/* Future Rota Date Overrides Modal */}
-                            {selectedFutureDate && (
-                                <div className="fixed inset-0 bg-slate-950/90 z-[110] flex items-center justify-center p-6 backdrop-blur-md">
-                                    <div className="bg-slate-900 w-full max-w-sm rounded-3xl p-6 border border-slate-800 shadow-2xl animate-in zoom-in duration-200">
-                                        <h3 className="text-lg font-black text-white mb-2 flex items-center gap-2">
-                                            <Calendar size={20} className="text-sky-450" />
-                                            Choose Rota Override
-                                        </h3>
-                                        <p className="text-slate-400 text-xs mb-5 font-medium">
-                                            Set your custom shift status for <b className="text-white font-mono">{selectedFutureDate.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' })}</b>.
-                                        </p>
-                                        
-                                        <div className="space-y-3 mb-6">
-                                            <button 
-                                                onClick={() => handleSetDayOverride('work')}
-                                                className="w-full p-4 bg-emerald-500/10 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 hover:border-emerald-500/50 rounded-2xl flex items-center justify-between transition-all font-bold text-sm"
-                                            >
-                                                <span>Scheduled Work Day</span>
-                                                <span className="text-[10px] uppercase font-bold tracking-widest bg-emerald-500/20 px-2 py-0.5 rounded">Pattern</span>
-                                            </button>
-
-                                            <button 
-                                                onClick={() => handleSetDayOverride('holiday')}
-                                                className="w-full p-4 bg-purple-500/10 hover:bg-purple-500/25 text-purple-400 border border-purple-500/30 hover:border-purple-500/50 rounded-2xl flex items-center justify-between transition-all font-bold text-sm"
-                                            >
-                                                <span>Holiday / Paid Leave</span>
-                                                <span className="text-[10px] uppercase font-bold tracking-widest bg-purple-500/20 px-2 py-0.5 rounded">Holiday</span>
-                                            </button>
-
-                                            <button 
-                                                onClick={() => handleSetDayOverride('sick')}
-                                                className="w-full p-4 bg-red-500/10 hover:bg-red-500/25 text-red-400 border border-red-500/30 hover:border-red-500/50 rounded-2xl flex items-center justify-between transition-all font-bold text-sm"
-                                            >
-                                                <span>Sick Day</span>
-                                                <span className="text-[10px] uppercase font-bold tracking-widest bg-red-500/20 px-2 py-0.5 rounded">Sick</span>
-                                            </button>
-
-                                            <button 
-                                                onClick={() => handleSetDayOverride('off')}
-                                                className="w-full p-4 bg-slate-800/50 hover:bg-slate-850 text-slate-300 border border-slate-700/50 hover:border-slate-700 rounded-2xl flex items-center justify-between transition-all font-bold text-sm"
-                                            >
-                                                <span>Scheduled Rest Day / Off</span>
-                                                <span className="text-[10px] uppercase font-bold tracking-widest bg-slate-800 px-2 py-0.5 rounded">Off day</span>
-                                            </button>
-
-                                            <button 
-                                                onClick={() => handleSetDayOverride('reset')}
-                                                className="w-full p-3 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30 hover:border-sky-500/50 rounded-2xl flex items-center justify-between transition-all font-bold text-xs"
-                                            >
-                                                <span>Reset to Standard Pattern</span>
-                                                <span className="text-[9px] uppercase font-bold tracking-widest bg-sky-500/20 px-2 py-0.5 rounded">Default</span>
-                                            </button>
-                                        </div>
-
-                                        <button 
-                                            onClick={() => setSelectedFutureDate(null)}
-                                            className="w-full py-4 bg-slate-800 hover:bg-slate-705 text-xs text-white uppercase font-black tracking-widest rounded-2xl border border-slate-700 transition-all text-center"
-                                        >
-                                            Cancel
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
+                            <RotaOverrideModal
+                                selectedFutureDate={selectedFutureDate}
+                                onClose={() => setSelectedFutureDate(null)}
+                                onSelectOverride={handleSetDayOverride}
+                            />
 
                             {/* Historical Shift Detail Modal */}
-                            {viewingPastSummary && (
-                                <div className="fixed inset-0 bg-slate-950/90 z-[110] flex items-center justify-center p-4 backdrop-blur-md">
-                                    <div className="bg-slate-900 w-full max-w-md max-h-[85vh] flex flex-col rounded-3xl border border-slate-800 shadow-2xl animate-in zoom-in duration-200">
-                                        
-                                        <div className="p-6 shrink-0 border-b border-slate-800 flex justify-between items-start">
-                                            <div>
-                                                <h3 className="text-lg font-black text-white flex items-center gap-2">
-                                                    <Sparkles size={20} className="text-sky-400" />
-                                                    Shift Detail Summary
-                                                </h3>
-                                                <p className="text-slate-400 text-[10px] uppercase tracking-widest font-bold font-sans mt-0.5">
-                                                    Recorded on <span className="text-white font-mono">{new Date(viewingPastSummary.date ? (viewingPastSummary.date.includes('T') ? viewingPastSummary.date : `${viewingPastSummary.date}T12:00:00`) : (viewingPastSummary.clockInTime || viewingPastSummary.timestamp?.seconds * 1000 || Date.now())).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' })}</span>
-                                                </p>
-                                            </div>
-                                            <div className="text-[10px] uppercase font-black tracking-widest px-2.5 py-1 bg-sky-500/10 border border-sky-500/20 rounded-md text-sky-400 font-bold self-start mt-1 shrink-0">
-                                                {viewingPastSummary.department || 'Aisles'} - {viewingPastSummary.zone || 'Zone A'}
-                                            </div>
-                                        </div>
-
-                                        <div className="flex-1 overflow-y-auto no-scrollbar p-6 space-y-6">
-                                            {(() => {
-                                                const hist = viewingPastSummary.history || [];
-                                                
-                                                // Derive activeSeconds accurately if saved as 0 or missing
-                                                let derivedActiveSecs = viewingPastSummary.activeSeconds || 0;
-                                                if (derivedActiveSecs <= 60 && hist.length > 0) {
-                                                    let sumElapsed = 0;
-                                                    hist.forEach((h: any) => {
-                                                        if (h.gap === 'BREAK' || h.gap === 'NOTE' || h.isNote) return;
-                                                        const c = parseInt(h.cases) || 0;
-                                                        let el = h.elapsedSeconds;
-                                                        if (el === undefined || isNaN(el) || el <= 0) {
-                                                            const r = parseFloat(h.rate);
-                                                            el = (r > 0 && c > 0) ? Math.round((c / r) * 3600) : 0;
-                                                        }
-                                                        sumElapsed += el;
-                                                    });
-                                                    if (sumElapsed > 0) derivedActiveSecs = sumElapsed;
-                                                }
-
-                                                // Derive total duration from clock times if saved as 0
-                                                let derivedTotalSecs = viewingPastSummary.totalSeconds || 0;
-                                                if (derivedTotalSecs <= 60) {
-                                                    if (viewingPastSummary.clockInTime && viewingPastSummary.clockOutTime) {
-                                                        const diff = (viewingPastSummary.clockOutTime - viewingPastSummary.clockInTime) / 1000;
-                                                        if (diff > 0) derivedTotalSecs = diff;
-                                                    } else if (derivedActiveSecs > 0) {
-                                                        derivedTotalSecs = derivedActiveSecs + (viewingPastSummary.breakSeconds || 2700);
-                                                    }
-                                                }
-
-                                                // Derive break seconds
-                                                let derivedBreakSecs = viewingPastSummary.breakSeconds || 0;
-                                                if (derivedBreakSecs === 0 && derivedTotalSecs > derivedActiveSecs) {
-                                                    derivedBreakSecs = derivedTotalSecs - derivedActiveSecs;
-                                                }
-
-                                                // Derive true final rate
-                                                let derivedFinalRate = viewingPastSummary.finalRate || 0;
-                                                if ((derivedFinalRate === 0 || derivedActiveSecs > 60) && (viewingPastSummary.totalCases || 0) > 0 && derivedActiveSecs > 10) {
-                                                    const calculatedRate = Math.round(((viewingPastSummary.totalCases || 0) / derivedActiveSecs) * 3600);
-                                                    if (derivedFinalRate === 0 || Math.abs(calculatedRate - derivedFinalRate) > 5) {
-                                                        derivedFinalRate = calculatedRate;
-                                                    }
-                                                }
-
-                                                const targetRateVal = shiftData.scoreConfig?.[viewingPastSummary.department || 'Aisles']?.targetRate || 220;
-                                                const targetTotalSec = ((viewingPastSummary.totalCases || 0) / targetRateVal) * 3600;
-                                                const netSavedSecs = Math.round(targetTotalSec - derivedActiveSecs);
-
-                                                return (
-                                                    <>
-                                                        {/* Shift Logistics/Timings */}
-                                                        <div>
-                                                            <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">Shift Timeline & Logistics</h4>
-                                                            <div className="grid grid-cols-2 gap-3">
-                                                                <div className="bg-slate-950/50 p-3 rounded-2xl border border-slate-800/80">
-                                                                    <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Clock size={10}/> Clock In</div>
-                                                                    <div className="text-lg font-black text-white">{viewingPastSummary.clockInTime ? new Date(viewingPastSummary.clockInTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--:--'}</div>
-                                                                </div>
-                                                                <div className="bg-slate-950/50 p-3 rounded-2xl border border-slate-800/80">
-                                                                    <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5"><LogOut size={10}/> Clock Out</div>
-                                                                    <div className="text-lg font-black text-white">{viewingPastSummary.clockOutTime ? new Date(viewingPastSummary.clockOutTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--:--'}</div>
-                                                                </div>
-                                                                <div className="bg-slate-950/50 p-3 rounded-2xl border border-slate-800/80">
-                                                                    <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Activity size={10}/> Gross Length</div>
-                                                                    <div className="text-lg font-black text-white">{formatHHMM(derivedTotalSecs)}</div>
-                                                                </div>
-                                                                <div className="bg-slate-950/50 p-3 rounded-2xl border border-slate-800/80">
-                                                                    <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Coffee size={10}/> Break Time</div>
-                                                                    <div className="text-lg font-black text-amber-400">{formatHHMM(derivedBreakSecs)}</div>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-
-                                                        {/* Performance Stats */}
-                                                        <div>
-                                                            <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">Total Picking Performance</h4>
-                                                            <div className="grid grid-cols-3 gap-3">
-                                                                <div className="bg-sky-950/20 p-3 rounded-2xl border border-sky-900/30 text-center">
-                                                                    <div className="text-[9px] font-bold text-sky-500/70 uppercase tracking-wider mb-1">Pick Rate</div>
-                                                                    <div className="text-xl font-black text-sky-400">{derivedFinalRate || 0}</div>
-                                                                    <div className="text-[8px] font-bold text-slate-500 mt-1">CASES / HR</div>
-                                                                </div>
-                                                                <div className="bg-slate-950/40 p-3 rounded-2xl border border-slate-800 text-center flex flex-col justify-center">
-                                                                    <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Total Cases</div>
-                                                                    <div className="text-xl font-black text-white">{(viewingPastSummary.totalCases || 0).toLocaleString()}</div>
-                                                                    <div className="text-[8px] font-bold text-slate-500 mt-1">IN {formatHHMM(derivedActiveSecs).split(':')[0]}h {formatHHMM(derivedActiveSecs).split(':')[1]}m</div>
-                                                                </div>
-                                                                <div className="bg-slate-950/40 p-3 rounded-2xl border border-slate-800 text-center flex flex-col justify-center">
-                                                                    <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Net Saved</div>
-                                                                    <div className={`text-xl font-black ${netSavedSecs >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                                                                        {netSavedSecs >= 0 ? '+' : '-'}
-                                                                        {formatTime(Math.abs(netSavedSecs)).split(':')[0]}<span className="text-xs">m</span>
-                                                                    </div>
-                                                                    <div className="text-[8px] font-bold text-slate-500 mt-1 uppercase">Vs Target</div>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    </>
-                                                );
-                                            })()}
-
-                                            {/* Activity & Movement Tracking */}
-                                            <div>
-                                                <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">Activity & Movement Tracking</h4>
-                                                <div className="grid grid-cols-3 gap-3">
-                                                    <div className="bg-slate-950/40 p-3 rounded-2xl border border-slate-800 text-center">
-                                                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Steps Count</div>
-                                                        <div className="text-xl font-black text-amber-500">{(viewingPastSummary.steps || 0).toLocaleString()}</div>
-                                                        <div className="text-[8px] font-bold text-slate-500 mt-1 uppercase">Total Steps</div>
-                                                    </div>
-                                                    <div className="bg-slate-950/40 p-3 rounded-2xl border border-slate-800 text-center">
-                                                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Distance (Km)</div>
-                                                        <div className="text-xl font-black text-emerald-400">{((viewingPastSummary.steps || 0) * 0.00075).toFixed(2)}</div>
-                                                        <div className="text-[8px] font-bold text-slate-500 mt-1 uppercase">Distance Km</div>
-                                                    </div>
-                                                    <div className="bg-slate-950/40 p-3 rounded-2xl border border-slate-800 text-center">
-                                                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Efficiency</div>
-                                                        <div className="text-xl font-black text-blue-400">{(viewingPastSummary.totalCases || 0) > 0 ? Math.round((viewingPastSummary.steps || 0) / (viewingPastSummary.totalCases || 1)) : '--'}</div>
-                                                        <div className="text-[8px] font-bold text-slate-500 mt-1 uppercase">Steps / Case</div>
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            {/* Department Breakdown */}
-                                            {(() => {
-                                                const breakdown = getDepartmentBreakdown(viewingPastSummary.history, viewingPastSummary);
-                                                if (breakdown.length === 0) return null;
-                                                return (
-                                                    <div>
-                                                        <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">Department Breakdown</h4>
-                                                        <div className="grid grid-cols-1 gap-2.5">
-                                                            {breakdown.map((item) => {
-                                                                const isAbove = item.rate >= item.targetRate;
-                                                                return (
-                                                                    <div key={item.department} className="bg-slate-950/45 p-3 rounded-2xl border border-slate-800/80 flex justify-between items-center">
-                                                                        <div className="flex items-center gap-3">
-                                                                            <div className={`w-2.5 h-2.5 rounded-full ${
-                                                                                item.zone === 'CHILLER' ? 'bg-blue-400' :
-                                                                                item.zone === 'FREEZER' ? 'bg-indigo-400' :
-                                                                                'bg-amber-400'
-                                                                            }`} />
-                                                                            <div>
-                                                                                <div className="text-xs font-black text-white">{item.departmentName}</div>
-                                                                                <div className="text-[8px] font-bold text-slate-500 uppercase tracking-wider">
-                                                                                    {item.picksCount} {item.picksCount === 1 ? 'order' : 'orders'} • target {item.targetRate}
-                                                                                </div>
-                                                                            </div>
-                                                                        </div>
-                                                                        <div className="text-right">
-                                                                            <div className={`text-sm font-black ${isAbove ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                                                                {item.rate} <span className="text-[8px] font-normal text-slate-400">P/H</span>
-                                                                            </div>
-                                                                            <div className="text-[10px] font-mono text-slate-305">
-                                                                                {item.cases} {item.cases === 1 ? 'case' : 'cases'}
-                                                                            </div>
-                                                                        </div>
-                                                                    </div>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })()}
-
-                                            {/* Orders Details (History) */}
-                                            {viewingPastSummary.history && viewingPastSummary.history.length > 0 && (
-                                                <div>
-                                                    <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 flex justify-between items-end gap-2">
-                                                        Order Details
-                                                        <span className="bg-slate-800 text-[8px] px-2 py-0.5 rounded text-slate-300 shrink-0">{viewingPastSummary.history.filter((h: any) => h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote).length} PICKS</span>
-                                                    </h4>
-                                                    <div className="bg-slate-950/40 rounded-2xl border border-slate-800 overflow-hidden">
-                                                        <table className="w-full text-[10px] sm:text-xs">
-                                                            <thead className="bg-slate-900 border-b border-slate-800">
-                                                                <tr className="text-slate-500 text-[8px] uppercase tracking-wider font-black">
-                                                                    <th className="py-2.5 px-3 text-left w-1/3">Time</th>
-                                                                    <th className="py-2.5 px-2 text-left">Label</th>
-                                                                    <th className="py-2.5 px-2 text-center">Cases</th>
-                                                                    <th className="py-2.5 px-3 text-right">Rate</th>
-                                                                </tr>
-                                                            </thead>
-                                                            <tbody className="divide-y divide-slate-800/50">
-                                                                {viewingPastSummary.history.map((h: any, idx: number) => {
-                                                                    const isNote = h.gap === 'NOTE' || h.isNote;
-                                                                    if (isNote) {
-                                                                        return (
-                                                                            <tr key={idx} className="bg-amber-500/5 hover:bg-amber-500/10 border-l-2 border-l-amber-500 transition-colors">
-                                                                                <td className="py-2.5 px-3 text-amber-400 font-extrabold whitespace-nowrap flex items-center gap-1.5 font-mono">
-                                                                                    {h.start}
-                                                                                </td>
-                                                                                <td colSpan={2} className="py-2.5 px-2 text-amber-300 font-bold break-words whitespace-normal text-[11px] sm:text-xs">
-                                                                                    <div className="flex flex-col">
-                                                                                        <span className="leading-relaxed font-black select-text tracking-wide">{h.storeLabel}</span>
-                                                                                        {h.departmentName && (
-                                                                                            <span className="text-[7px] text-amber-500/60 font-black tracking-wider uppercase block mt-0.5">
-                                                                                                LOGGED IN: {h.departmentName}
-                                                                                            </span>
-                                                                                        )}
-                                                                                    </div>
-                                                                                </td>
-                                                                                <td className="py-2.5 px-3 text-right text-amber-500/70 font-black text-[9px] uppercase tracking-wider whitespace-nowrap">
-                                                                                    NOTE
-                                                                                </td>
-                                                                            </tr>
-                                                                        );
-                                                                    }
-                                                                    const isEditingThisOrder = editingOrderIndex === idx;
-                                                                    const orderLabelToDisplay = (() => {
-                                                                        if (h.gap === 'BREAK') return 'BREAK';
-                                                                        const rawLabel = (h.storeLabel || '').trim();
-                                                                        if (rawLabel && rawLabel !== '-') return rawLabel;
-                                                                        if (h.departmentName || h.department) return h.departmentName || h.department;
-                                                                        return `Order #${idx + 1}`;
-                                                                    })();
-
-                                                                    return (
-                                                                        <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
-                                                                            <td className="py-2.5 px-3 text-slate-400 whitespace-nowrap font-mono tracking-tighter">
-                                                                                {h.start} <span className="text-slate-600 font-sans mx-0.5">→</span> {h.finish}
-                                                                            </td>
-                                                                            <td className="py-2.5 px-2 text-sky-400 font-bold max-w-[200px]">
-                                                                                <div className="flex flex-col">
-                                                                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                                                                        {isEditingThisOrder ? (
-                                                                                            <div className="flex items-center gap-1 my-1">
-                                                                                                <input
-                                                                                                    type="text"
-                                                                                                    value={editingOrderLabel}
-                                                                                                    onChange={(e) => setEditingOrderLabel(e.target.value)}
-                                                                                                    className="bg-slate-900 border border-sky-500/50 text-white text-[11px] font-mono px-2 py-0.5 rounded outline-none focus:ring-1 focus:ring-sky-400 max-w-[130px]"
-                                                                                                    autoFocus
-                                                                                                    placeholder="Store / Aisle label"
-                                                                                                    onKeyDown={(e) => {
-                                                                                                        if (e.key === 'Enter') handleSavePastOrderLabel(idx);
-                                                                                                        if (e.key === 'Escape') { setEditingOrderIndex(null); setEditingOrderLabel(''); }
-                                                                                                    }}
-                                                                                                />
-                                                                                                <button
-                                                                                                    onClick={() => handleSavePastOrderLabel(idx)}
-                                                                                                    className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 p-1 rounded transition-colors shrink-0"
-                                                                                                    title="Save Label"
-                                                                                                >
-                                                                                                    <Check size={12} />
-                                                                                                </button>
-                                                                                                <button
-                                                                                                    onClick={() => { setEditingOrderIndex(null); setEditingOrderLabel(''); }}
-                                                                                                    className="bg-slate-800 hover:bg-slate-700 text-slate-400 p-1 rounded transition-colors shrink-0"
-                                                                                                    title="Cancel"
-                                                                                                >
-                                                                                                    <X size={12} />
-                                                                                                </button>
-                                                                                            </div>
-                                                                                        ) : (
-                                                                                            <>
-                                                                                                <span className="truncate max-w-[140px] sm:max-w-[180px]" title={orderLabelToDisplay}>
-                                                                                                    {orderLabelToDisplay}
-                                                                                                </span>
-                                                                                                {h.gap !== 'BREAK' && (
-                                                                                                    <button
-                                                                                                        onClick={(e) => {
-                                                                                                            e.stopPropagation();
-                                                                                                            setEditingOrderIndex(idx);
-                                                                                                            setEditingOrderLabel(h.storeLabel || (orderLabelToDisplay.startsWith('Order #') ? '' : orderLabelToDisplay));
-                                                                                                        }}
-                                                                                                        className="text-slate-500 hover:text-sky-400 p-0.5 rounded transition-colors shrink-0"
-                                                                                                        title="Edit Order Label"
-                                                                                                    >
-                                                                                                        <Edit2 size={11} />
-                                                                                                    </button>
-                                                                                                )}
-                                                                                            </>
-                                                                                        )}
-                                                                                        {(h.labelImage || (h.labelImages && h.labelImages.length > 0)) && (
-                                                                                            <button 
-                                                                                                onClick={(e) => { e.stopPropagation(); setViewingLabels(h.labelImages?.length ? h.labelImages : (h.labelImage ? [h.labelImage] : null)); }} 
-                                                                                                className="text-emerald-400 p-1 hover:bg-emerald-500/20 rounded shrink-0 border border-emerald-500/20"
-                                                                                            >
-                                                                                                <Camera size={12} />
-                                                                                            </button>
-                                                                                        )}
-                                                                                    </div>
-                                                                                    {h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote && orderLabelToDisplay !== (h.departmentName || h.department || 'Aisles') && (
-                                                                                        <span className="text-[8px] text-slate-500 font-bold tracking-wider uppercase block mt-0.5">
-                                                                                            {h.departmentName || h.department || 'Aisles'}
-                                                                                        </span>
-                                                                                    )}
-                                                                                </div>
-                                                                            </td>
-                                                                            <td className="py-2.5 px-2 text-center text-white font-medium">{h.cases}</td>
-                                                                            <td className={`py-2.5 px-3 text-right font-black w-[50px] ${h.rate && h.rate > 0 ? (h.statusClass?.includes('emerald') ? 'text-emerald-400' : 'text-slate-300') : 'text-slate-500'}`}>
-                                                                                {h.rate || '-'}
-                                                                            </td>
-                                                                        </tr>
-                                                                    );
-                                                                })}
-                                                            </tbody>
-                                                        </table>
-                                                    </div>
-                                                </div>
-                                            )}
-
-                                            {/* General Shift Labels Images */}
-                                            {(() => {
-                                                const extractedLabels: {title: string, url: any, isPick: boolean}[] = [];
-                                                if (viewingPastSummary.labelImage) {
-                                                    extractedLabels.push({ title: "Base Label", url: viewingPastSummary.labelImage, isPick: false });
-                                                }
-                                                if (Array.isArray(viewingPastSummary.labelImages)) {
-                                                    viewingPastSummary.labelImages.forEach((img: any, i: number) => {
-                                                        extractedLabels.push({ title: `Main Label ${i+1}`, url: img, isPick: false });
-                                                    });
-                                                }
-                                                if (Array.isArray(storedShiftPhotos) && storedShiftPhotos.length > 0) {
-                                                    storedShiftPhotos.forEach((photo: any, i: number) => {
-                                                        if (photo && photo.blob) {
-                                                            extractedLabels.push({ title: `Stored Photo ${i+1}`, url: photo.blob, isPick: false });
-                                                        }
-                                                    });
-                                                }
-                                                if (Array.isArray(viewingPastSummary.history)) {
-                                                    viewingPastSummary.history.forEach((h: any, i: number) => {
-                                                        if (h.labelImage) extractedLabels.push({ title: `Order ${i+1}`, url: h.labelImage, isPick: true });
-                                                        if (Array.isArray(h.labelImages)) {
-                                                            h.labelImages.forEach((img: any, j: number) => {
-                                                                extractedLabels.push({ title: `Pick ${i+1}: Label ${h.labelImages.length > 1 ? j+1 : ''}`, url: img, isPick: true });
-                                                            });
-                                                        }
-                                                    });
-                                                }
-                                                
-                                                if (extractedLabels.length === 0) return null;
-                                                
-                                                return (
-                                                    <div>
-                                                        <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">All Scanned Labels</h4>
-                                                        <div className="flex flex-wrap gap-2">
-                                                            {extractedLabels.map((lbl, idx) => (
-                                                                <button 
-                                                                    key={idx}
-                                                                    onClick={() => setViewingLabels([lbl.url])}
-                                                                    className={`px-4 py-2.5 bg-${lbl.isPick ? 'emerald' : 'sky'}-500/10 text-${lbl.isPick ? 'emerald' : 'sky'}-400 border border-${lbl.isPick ? 'emerald' : 'sky'}-500/20 rounded-xl text-[10px] font-black tracking-widest uppercase transition-colors hover:bg-${lbl.isPick ? 'emerald' : 'sky'}-500/20 flex items-center gap-2`}
-                                                                >
-                                                                    <Camera size={12} /> {lbl.title}
-                                                                </button>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })()}
-                                        </div>
-                                        
-                                        <div className="p-4 border-t border-slate-800 shrink-0 select-none flex gap-2">
-                                            {(isUserAdmin() || (viewingPastSummary.userName || '').toUpperCase().trim() === (shiftData.operator || '').toUpperCase().trim()) && (
-                                                <button
-                                                    onClick={async () => {
-                                                        if (window.confirm("Are you sure you want to delete this shift summary?")) {
-                                                            const targetUser = viewingPastSummary.userName || shiftData.operator;
-                                                            const docId = viewingPastSummary.id || `${auth.currentUser?.uid || 'anon'}_${viewingPastSummary.clockInTime}`;
-                                                            const success = await deleteShiftSummary(docId, targetUser, viewingPastSummary.clockInTime);
-                                                            if (success) {
-                                                                haptic('medium');
-                                                                setShiftSummaries(prev => prev.filter(s => s.id !== viewingPastSummary.id && s.clockInTime !== viewingPastSummary.clockInTime));
-                                                                setViewingPastSummary(null);
-                                                                fetchShiftSummaries(targetUser, true).then(fresh => {
-                                                                    setShiftSummaries(fresh);
-                                                                });
-                                                            } else {
-                                                                haptic('heavy');
-                                                                alert("Failed to delete shift record.");
-                                                            }
-                                                        }
-                                                    }}
-                                                    className="px-4 py-4 bg-red-500/10 hover:bg-red-500/20 active:scale-[0.98] text-xs text-red-400 font-bold tracking-wider rounded-2xl border border-red-500/20 transition-all flex items-center gap-1.5 shrink-0"
-                                                >
-                                                    <Trash2 size={16} /> Delete
-                                                </button>
-                                            )}
-                                            <button
-                                                onClick={async () => {
-                                                    haptic('medium');
-                                                    const copied = await copyFullShiftReport(viewingPastSummary);
-                                                    if (copied) {
-                                                        alert("Full Shift Report & Restore Payload copied to clipboard!");
-                                                    } else {
-                                                        alert("Failed to copy report.");
-                                                    }
-                                                }}
-                                                className="px-4 py-4 bg-sky-500/10 hover:bg-sky-500/20 active:scale-[0.98] text-xs text-sky-400 font-bold tracking-wider rounded-2xl border border-sky-500/20 transition-all flex items-center gap-1.5 shrink-0"
-                                            >
-                                                <Share2 size={16} /> Copy Full Report
-                                            </button>
-                                            <button 
-                                                onClick={() => setViewingPastSummary(null)}
-                                                className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 active:scale-[0.98] text-xs text-white uppercase font-black tracking-widest rounded-2xl border border-slate-700 transition-all text-center"
-                                            >
-                                                Close Shift Sheet
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
+                            <HistoricalShiftModal
+                                viewingPastSummary={viewingPastSummary}
+                                onClose={() => setViewingPastSummary(null)}
+                                shiftData={shiftData}
+                                isUserAdmin={isUserAdmin}
+                                storedShiftPhotos={storedShiftPhotos}
+                                setShiftSummaries={setShiftSummaries}
+                                setViewingPastSummary={setViewingPastSummary}
+                                setViewingLabels={setViewingLabels}
+                                editingOrderIndex={editingOrderIndex}
+                                setEditingOrderIndex={setEditingOrderIndex}
+                                editingOrderLabel={editingOrderLabel}
+                                setEditingOrderLabel={setEditingOrderLabel}
+                                handleSavePastOrderLabel={handleSavePastOrderLabel}
+                            />
 
                             {/* Restore Shift Modal */}
-                            {showRestoreModal && (
-                                <div className="fixed inset-0 bg-slate-950/90 z-[200] flex items-center justify-center p-4 backdrop-blur-md">
-                                    <div className="bg-slate-900 w-full max-w-lg rounded-3xl p-6 border border-slate-800 shadow-2xl animate-in zoom-in duration-200 flex flex-col gap-4">
-                                        <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-                                            <div className="flex items-center gap-2 text-white font-black text-base italic">
-                                                <RotateCcw className="text-emerald-400" size={18} /> RESTORE SHIFT FROM REPORT
-                                            </div>
-                                            <button onClick={() => setShowRestoreModal(false)} className="text-slate-500 hover:text-white p-1">
-                                                <X size={18} />
-                                            </button>
-                                        </div>
-                                        
-                                        <p className="text-xs text-slate-400 leading-relaxed font-bold">
-                                            Paste your exported Shift Report CSV or plain text report below. The system will parse the history and restore the complete shift into your Rota and database history.
-                                        </p>
-
-                                        <textarea
-                                            value={restoreText}
-                                            onChange={(e) => setRestoreText(e.target.value)}
-                                            placeholder="Paste Shift Report CSV / JSON here..."
-                                            rows={8}
-                                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-emerald-300 font-mono focus:outline-none focus:border-emerald-500/50 resize-none"
-                                        />
-
-                                        {restoreStatus && (
-                                            <div className={`p-3 rounded-xl text-xs font-black uppercase tracking-wider ${restoreStatus.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : restoreStatus.type === 'info' ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}`}>
-                                                {restoreStatus.msg}
-                                            </div>
-                                        )}
-
-                                        <div className="flex gap-3 pt-2">
-                                            <button
-                                                onClick={() => {
-                                                    setRestoreText('');
-                                                    setRestoreStatus(null);
-                                                    setShowRestoreModal(false);
-                                                }}
-                                                className="flex-1 py-3 bg-slate-800 text-slate-400 rounded-xl text-xs font-bold uppercase tracking-wider hover:text-white"
-                                            >
-                                                Cancel
-                                            </button>
-                                            <button
-                                                onClick={async () => {
-                                                    haptic('heavy');
-                                                    setRestoreStatus({ type: 'info', msg: 'Parsing & restoring shift...' });
-                                                    const res = await restoreShiftFromReportText(restoreText, shiftData.operator || 'DASERGHIE');
-                                                    if (res.success) {
-                                                        setRestoreStatus({ type: 'success', msg: res.message });
-                                                        fetchShiftSummaries(shiftData.operator || 'DASERGHIE', true).then(fresh => {
-                                                            setShiftSummaries(fresh);
-                                                        });
-                                                        setTimeout(() => {
-                                                            setShowRestoreModal(false);
-                                                            setRestoreText('');
-                                                            setRestoreStatus(null);
-                                                        }, 1500);
-                                                    } else {
-                                                        setRestoreStatus({ type: 'error', msg: res.message });
-                                                    }
-                                                }}
-                                                className="flex-1 py-3 bg-emerald-500 text-white rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-400 shadow-lg shadow-emerald-500/20"
-                                            >
-                                                Restore Shift
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
+                            <RestoreShiftModal
+                                isOpen={showRestoreModal}
+                                onClose={() => setShowRestoreModal(false)}
+                                restoreText={restoreText}
+                                setRestoreText={setRestoreText}
+                                restoreStatus={restoreStatus}
+                                setRestoreStatus={setRestoreStatus}
+                                operator={shiftData.operator || 'DASERGHIE'}
+                                onShiftRestored={(fresh) => setShiftSummaries(fresh)}
+                            />
                         </>
                     );
                 })()}
 
                     {/* PIN Modal */}
-                    {pinModal.show && (
-                        <div className="fixed inset-0 bg-slate-950/90 z-[400] flex items-center justify-center p-6 backdrop-blur-md pt-safe-top pb-safe-bottom">
-                            <div className="bg-slate-900 w-full max-w-sm rounded-3xl p-8 border border-slate-800 shadow-2xl animate-in fade-in zoom-in duration-200">
-                                <div className="text-center mb-6">
-                                    <h3 className="text-xl font-bold text-white mb-2">Admin Security</h3>
-                                    <p className="text-slate-400 text-sm">Enter the Admin PIN to proceed with {pinModal.type === 'clear' ? 'clearing leaderboard' : pinModal.type === 'purge' ? '6-week database purge' : 'factory reset'}.</p>
-                                </div>
-                                <div className="flex justify-center gap-3 mb-8">
-                                    {[1,2,3,4,5,6].map((i) => (
-                                        <div key={i} className={`w-3 h-3 rounded-full ${pinModal.input.length >= i ? 'bg-emerald-400' : 'bg-slate-700'}`} />
-                                    ))}
-                                </div>
-                                <div className="grid grid-cols-3 gap-3">
-                                    {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
-                                        <button 
-                                            key={num} 
-                                            onClick={() => {
-                                                haptic('light');
-                                                if (pinModal.input.length < 6) {
-                                                    const nextInput = pinModal.input + num;
-                                                    setPinModal({ ...pinModal, input: nextInput });
-                                                    if (nextInput.length === 6) {
-                                                        if (nextInput === USERS.ADMIN) {
-                                                            haptic('medium');
-                                                            if (pinModal.type === 'clear') {
-                                                                clearLeaderboard().then(success => {
-                                                                    if (success) window.alert("Leaderboard cleared!");
-                                                                });
-                                                                setPinModal({ ...pinModal, show: false, input: '' });
-                                                            } else if (pinModal.type === 'purge') {
-                                                                purgeDatabaseOlderThan6Weeks().then(res => {
-                                                                    if (res.success) {
-                                                                        window.alert(`Database purge complete! Deleted ${res.summariesDeleted} shift summaries and ${res.leaderboardDeleted} leaderboard entries older than 6 weeks.`);
-                                                                    } else {
-                                                                        window.alert(`Database purge failed: ${res.error}`);
-                                                                    }
-                                                                });
-                                                                setPinModal({ ...pinModal, show: false, input: '' });
-                                                            } else {
-                                                                const consented = localStorage.getItem('userConsented');
-                                                                localStorage.clear();
-                                                                if (consented) localStorage.setItem('userConsented', consented);
-                                                                window.location.reload();
-                                                            }
-                                                        } else {
-                                                            haptic('heavy');
-                                                            setPinModal({ ...pinModal, input: '' });
-                                                        }
-                                                    }
-                                                }
-                                            }}
-                                            className="h-16 rounded-2xl bg-slate-800 text-white text-xl font-bold hover:bg-slate-700 active:scale-95 transition-all border border-slate-700/50"
-                                        >
-                                            {num}
-                                        </button>
-                                    ))}
-                                    <button 
-                                        onClick={() => { haptic('light'); setPinModal({ ...pinModal, show: false }); }}
-                                        className="h-16 rounded-2xl bg-slate-800 text-slate-400 flex items-center justify-center hover:bg-slate-700 active:scale-95 transition-all border border-slate-700/50"
-                                    >
-                                        <X size={24} />
-                                    </button>
-                                    <button 
-                                        onClick={() => {
-                                            haptic('light');
-                                            if (pinModal.input.length < 6) {
-                                                const nextInput = pinModal.input + '0';
-                                                setPinModal({ ...pinModal, input: nextInput });
-                                                if (nextInput.length === 6) {
-                                                    if (nextInput === USERS.ADMIN) {
-                                                        haptic('medium');
-                                                        if (pinModal.type === 'clear') {
-                                                            clearLeaderboard().then(success => {
-                                                                if (success) window.alert("Leaderboard cleared!");
-                                                            });
-                                                            setPinModal({ ...pinModal, show: false, input: '' });
-                                                        } else if (pinModal.type === 'purge') {
-                                                            purgeDatabaseOlderThan6Weeks().then(res => {
-                                                                if (res.success) {
-                                                                    window.alert(`Database purge complete! Deleted ${res.summariesDeleted} shift summaries and ${res.leaderboardDeleted} leaderboard entries older than 6 weeks.`);
-                                                                } else {
-                                                                    window.alert(`Database purge failed: ${res.error}`);
-                                                                }
-                                                            });
-                                                            setPinModal({ ...pinModal, show: false, input: '' });
-                                                        } else {
-                                                            const consented = localStorage.getItem('userConsented');
-                                                            localStorage.clear();
-                                                            if (consented) localStorage.setItem('userConsented', consented);
-                                                            window.location.reload();
-                                                        }
-                                                    } else {
-                                                        haptic('heavy');
-                                                        setPinModal({ ...pinModal, input: '' });
-                                                    }
-                                                }
-                                            }
-                                        }}
-                                        className="h-16 rounded-2xl bg-slate-800 text-white text-xl font-bold hover:bg-slate-700 active:scale-95 transition-all border border-slate-700/50"
-                                    >
-                                        0
-                                    </button>
-                                    <button 
-                                        onClick={() => { haptic('light'); setPinModal({ ...pinModal, input: pinModal.input.slice(0, -1) }); }}
-                                        className="h-16 rounded-2xl bg-slate-800 text-slate-400 flex items-center justify-center hover:bg-slate-700 active:scale-95 transition-all border border-slate-700/50"
-                                    >
-                                        <Trash2 size={24} />
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
+                    <AdminPinModal
+                        isOpen={pinModal.show}
+                        type={pinModal.type}
+                        input={pinModal.input}
+                        onInputChange={(newInput) => setPinModal({ ...pinModal, input: newInput })}
+                        onClose={() => setPinModal({ ...pinModal, show: false, input: '' })}
+                    />
                 {activeScreen === 1 && (
                     <div id="screen-performance" className="h-full flex flex-col">
                         <PerformanceDashboard 
@@ -7044,549 +6425,69 @@ export default function App() {
             )}
 
             {/* Order Finish Procedure Modal */}
-            {orderFinishedData && (
-                <div className="fixed inset-0 z-[150] bg-slate-950 flex flex-col animate-in fade-in zoom-in-95 duration-200 pt-safe-top pb-safe-bottom">
-                    <div className="flex-1 overflow-y-auto p-6 pb-20">
-                        <div className="flex justify-center mb-6 mt-6">
-                            <div className="w-16 h-16 rounded-full bg-slate-900 border-2 border-emerald-500/20 shadow-lg flex items-center justify-center">
-                                <CheckCircle className="text-emerald-500" size={32} />
-                            </div>
-                        </div>
-                        
-                        <h2 className="text-[26px] font-black text-white text-center tracking-tight mb-2">Order Finish Procedure</h2>
-                        <p className="text-slate-400 text-sm text-center mb-8 font-medium">Follow the steps below to save your pick run securely</p>
-                        
-                        <div className="bg-slate-900/60 rounded-[28px] p-6 border border-slate-800 shadow-xl mb-8 space-y-8">
-                            <div className="flex gap-4">
-                                <div className="w-7 h-7 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center font-bold text-sm shrink-0">1</div>
-                                <div>
-                                    <h3 className="text-white font-bold text-[13px] uppercase tracking-wider mb-1.5">Review Order Performance</h3>
-                                    <p className="text-slate-400 text-[13px]">Cases: <span className="text-white font-bold">{orderFinishedData.cases}</span> <span className="mx-1 text-slate-600">|</span> Speed: <span className="text-emerald-400 font-bold">{orderFinishedData.finalRate} P/H.</span></p>
-                                </div>
-                            </div>
-
-                            <div className="flex gap-4">
-                                <div className="w-7 h-7 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center font-bold text-sm shrink-0">2</div>
-                                <div>
-                                    <h3 className="text-white font-bold text-[13px] uppercase tracking-wider mb-1.5">Capture Store Labels (Optional)</h3>
-                                    <p className="text-slate-500 text-[13px] leading-relaxed">Take photo of routing label slips for digital audit trails. Yes, multiple photos are supported!</p>
-                                </div>
-                            </div>
-
-                            <div className="flex gap-4">
-                                <div className="w-7 h-7 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center font-bold text-sm shrink-0">3</div>
-                                <div>
-                                    <h3 className="text-white font-bold text-[13px] uppercase tracking-wider mb-1.5">Finalize & Add To History</h3>
-                                    <p className="text-slate-500 text-[13px] leading-relaxed">Click <span className="text-emerald-400 font-bold">Save & Finish</span> below to record this run in your shift log.</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        {pendingLabelImages.length > 0 && (
-                            <div className="mb-4 animate-in fade-in slide-in-from-bottom-4">
-                                <h4 className="text-[11px] uppercase font-bold tracking-widest text-slate-500 mb-3">Photos Captured ({pendingLabelImages.length})</h4>
-                                <div className="flex gap-3 overflow-x-auto pb-4 no-scrollbar">
-                                    {pendingLabelImages.map((img, i) => (
-                                        <div key={i} className="relative w-[140px] h-[90px] rounded-2xl overflow-hidden shrink-0 border border-slate-700 bg-slate-900 group shadow-lg" onClick={() => setViewingLabels([img])}>
-                                            <img src={img} className="w-full h-full object-cover" />
-                                            <div className="absolute bottom-2 left-2 bg-slate-950/80 px-2.5 py-1 rounded-md text-[10px] text-white font-bold backdrop-blur-sm shadow-sm border border-white/10">Label {i + 1}</div>
-                                            <button 
-                                                onClick={(e) => { e.stopPropagation(); setPendingLabelImages(prev => prev.filter((_, idx) => idx !== i)); haptic('light'); }} 
-                                                className="absolute top-2 right-2 w-7 h-7 rounded-full bg-slate-950/80 flex items-center justify-center text-white backdrop-blur border border-white/10 opacity-80 hover:opacity-100 transition-opacity"
-                                            >
-                                                <X size={14} />
-                                            </button>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="fixed bottom-0 left-0 right-0 p-5 pb-10 bg-slate-950 flex gap-4 z-10 max-w-2xl mx-auto pb-safe-bottom pt-6 border-t border-slate-900">
-                        <button 
-                            className="flex-1 py-4 bg-[#0ea5e9] text-white rounded-[20px] font-bold text-base flex flex-col sm:flex-row items-center justify-center gap-2 hover:bg-[#0284c7] transition-colors active:scale-95 shadow-lg shadow-[#0ea5e9]/20"
-                            onClick={async () => {
-                                haptic('light');
-                                if (pendingLabelImages.length >= 4) {
-                                    alert("Maximum of 4 pictures allowed.");
-                                    return;
-                                }
-                                try {
-                                    let dataUrl = '';
-                                    let useFallback = false;
-                                    try {
-                                        const permissions = await CapCamera.checkPermissions();
-                                        if (permissions.camera === 'granted') {
-                                            const photo = await CapCamera.getPhoto({
-                                                quality: 40,
-                                                allowEditing: false,
-                                                resultType: CameraResultType.DataUrl,
-                                                source: CameraSource.Camera
-                                            });
-                                            dataUrl = photo.dataUrl || '';
-                                        } else if (permissions.camera === 'prompt' || permissions.camera === 'denied') {
-                                            const request = await CapCamera.requestPermissions();
-                                            if (request.camera === 'granted') {
-                                                const photo = await CapCamera.getPhoto({
-                                                    quality: 40,
-                                                    allowEditing: false,
-                                                    resultType: CameraResultType.DataUrl,
-                                                    source: CameraSource.Camera
-                                                });
-                                                dataUrl = photo.dataUrl || '';
-                                            } else {
-                                                useFallback = true;
-                                            }
-                                        } else {
-                                            useFallback = true;
-                                        }
-                                    } catch (capErr) {
-                                        console.warn("Capacitor camera failed or unsupported, using web fallback.", capErr);
-                                        useFallback = true;
-                                    }
-
-                                    if (useFallback || !dataUrl) {
-                                        dataUrl = await triggerWebCamera();
-                                    }
-
-                                    if (dataUrl) {
-                                        const compressed = await compressImage(dataUrl);
-                                        setPendingLabelImages(prev => [...prev, compressed]);
-                                        haptic('medium');
-                                    }
-                                } catch (e) {
-                                    alert("Failed to access camera: " + (e instanceof Error ? e.message : 'Unknown error'));
-                                }
-                            }}
-                        >
-                            <Camera size={20} /> Take Photo
-                        </button>
-                        <button 
-                            className="flex-1 py-4 bg-emerald-500 text-white rounded-[20px] font-bold text-base flex flex-col sm:flex-row items-center justify-center gap-2 hover:bg-emerald-400 transition-colors active:scale-95 shadow-lg shadow-emerald-500/20"
-                            onClick={confirmFinishPick}
-                        >
-                            <CheckCircle size={20} /> Save & Finish
-                        </button>
-                    </div>
-                </div>
-            )}
+            <OrderFinishModal
+                orderFinishedData={orderFinishedData}
+                pendingLabelImages={pendingLabelImages}
+                setPendingLabelImages={setPendingLabelImages}
+                setViewingLabels={setViewingLabels}
+                onConfirmFinish={confirmFinishPick}
+            />
 
                 {/* Shift Summary Modal */}
-                {showSummary && (
-                    <div id="summary-modal" className="fixed inset-0 bg-slate-950/80 flex flex-col items-center justify-center z-[150] px-4 backdrop-blur-sm pt-safe-top pb-safe-bottom">
-                            <div className="bg-slate-900 p-6 rounded-3xl w-full max-w-[340px] text-center border border-slate-800 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
-                                <div className={`w-16 h-16 bg-gradient-to-br ${theme.gradient} rounded-2xl mx-auto mb-4 flex items-center justify-center shadow-lg ${theme.shadow}`}>
-                                    <CheckCircle size={32} className="text-white" />
-                                </div>
-                                <h3 className="text-white text-2xl font-bold mb-1 tracking-tight">Shift Complete</h3>
-                                <p className="text-slate-400 mb-6 text-sm">{getSummaryMessage()}</p>
-                                
-                                <div className="bg-slate-950 rounded-2xl p-4 mb-6 border border-slate-800/50 space-y-3">
-                                    <div className="flex justify-between items-center">
-                                        <span className="text-slate-400 text-sm font-medium">Total Cases</span>
-                                        <span className="text-white font-bold text-lg">{isShiftFinalized ? finalizedStats?.cases : shiftData.totalCases}</span>
-                                    </div>
-                                    <div className="flex justify-between items-center">
-                                        <span className="text-slate-400 text-sm font-medium">Avg Pick Rate</span>
-                                        <span className={`font-bold text-lg ${(isShiftFinalized ? (finalizedStats?.rate || 0) : rate) >= targetRate ? 'text-emerald-400' : 'text-red-400'}`}>{isShiftFinalized ? finalizedStats?.rate : rate} <span className="text-xs text-slate-400 font-normal">P/H</span></span>
-                                    </div>
-                                    {(shiftData.firestreak || 0) > 0 && (
-                                        <div className="flex justify-between items-center py-1.5 px-3 bg-orange-500/10 border border-orange-500/20 rounded-xl">
-                                            <div className="flex items-center gap-2">
-                                                <Flame size={14} className="text-orange-500 fill-orange-500" />
-                                                <span className="text-orange-500 text-xs font-black uppercase tracking-widest">Firestreak</span>
-                                            </div>
-                                            <span className="text-white font-black text-sm">{shiftData.firestreak} SHIFTS</span>
-                                        </div>
-                                    )}
-                                    <div className="flex justify-between items-center">
-                                        <span className="text-slate-400 text-sm font-medium">Shift Time</span>
-                                        <span className="text-white font-bold text-lg">{formatHHMM(isShiftFinalized ? (finalizedStats?.activeElapsedSeconds || 0) : activeElapsedSeconds)}</span>
-                                    </div>
-                                    {isAisles && (
-                                        <div className="border border-sky-500/10 bg-sky-950/20 rounded-2xl p-3.5 space-y-2.5">
-                                            <div className="flex justify-between items-center border-b border-sky-500/10 pb-2">
-                                                <span className="text-sky-400 text-sm font-bold uppercase tracking-tighter flex items-center gap-1.5 font-bold">
-                                                    <Sparkles size={11} className="text-sky-400" />
-                                                    PWA Exemption
-                                                </span>
-                                                <span className="text-sky-400 font-extrabold text-lg">+{formatTime(isShiftFinalized ? (finalizedStats?.exemption || 0) : finalExemption)}</span>
-                                            </div>
-                                            
-                                            <div className="space-y-1.5 text-slate-450 text-[10px] font-mono leading-relaxed select-none">
-                                                <div className="flex justify-between">
-                                                    <span>Prep (Max 10m):</span>
-                                                    <span className="text-slate-200 font-bold">
-                                                        +{formatTime(isShiftFinalized ? calculateAislesExemptionDetail(finalizedStats?.totalSeconds || 0).prep : accruedPrep)}
-                                                    </span>
-                                                </div>
-                                                <div className="flex justify-between">
-                                                    <span>Dinner (Max 30m):</span>
-                                                    <span className="text-slate-200 font-bold">
-                                                        +{formatTime(isShiftFinalized ? calculateAislesExemptionDetail(finalizedStats?.totalSeconds || 0).dinner : accruedDinner)}
-                                                    </span>
-                                                </div>
-                                                <div className="flex justify-between">
-                                                    <span>Cleanup (Max 5m):</span>
-                                                    <span className="text-slate-200 font-bold">
-                                                        +{formatTime(isShiftFinalized ? calculateAislesExemptionDetail(finalizedStats?.totalSeconds || 0).cleanup : accruedCleanup)}
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-                                    <div className="flex justify-between items-center border-t border-slate-800/50 pt-2">
-                                        <span className="text-slate-400 text-sm font-medium">Break / Idle Duration</span>
-                                        <div className="text-right">
-                                            <div className="text-white font-bold text-lg">
-                                                {formatHHMM(isShiftFinalized ? (finalizedStats?.breakSeconds || 0) : shiftData.totalExcludedTime)}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
+                <ShiftSummaryModal
+                    isOpen={showSummary}
+                    onClose={() => setShowSummary(false)}
+                    theme={theme}
+                    getSummaryMessage={getSummaryMessage}
+                    isShiftFinalized={isShiftFinalized}
+                    finalizedStats={finalizedStats}
+                    shiftData={shiftData}
+                    rate={rate}
+                    targetRate={targetRate}
+                    activeElapsedSeconds={activeElapsedSeconds}
+                    isAisles={isAisles}
+                    finalExemption={finalExemption}
+                    accruedPrep={accruedPrep}
+                    accruedDinner={accruedDinner}
+                    accruedCleanup={accruedCleanup}
+                    shiftNotes={shiftNotes}
+                    setShiftNotes={setShiftNotes}
+                    updateShiftData={updateShiftData}
+                    takeScreenshot={takeScreenshot}
+                    downloadReport={downloadReport}
+                    endShift={endShift}
+                />
 
-                                {/* Department Breakdown */}
-                                {(() => {
-                                    const breakdown = getDepartmentBreakdown(shiftData.history);
-                                    if (breakdown.length === 0) return null;
-                                    return (
-                                        <div className="border border-slate-800/80 bg-slate-950/40 rounded-2xl p-3.5 space-y-2.5 text-left mb-6 max-h-[165px] overflow-y-auto custom-scrollbar">
-                                            <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-800/60 pb-1.5 flex justify-between items-center">
-                                                <span>Department Summary</span>
-                                                <span className="text-[8px] font-bold text-sky-400 font-mono">MULTI-DEPOT</span>
-                                            </h4>
-                                            <div className="space-y-2.5">
-                                                {breakdown.map((item: any) => {
-                                                    const isAbove = item.rate >= item.targetRate;
-                                                    const netSec = item.netSeconds || 0;
-                                                    const isNetGood = netSec >= 0;
-                                                    const netFormatted = `${isNetGood ? '+' : '-'}${formatTime(Math.abs(netSec))}`;
-                                                    return (
-                                                        <div key={item.department} className="flex justify-between items-center text-xs">
-                                                            <div>
-                                                                <span className="text-white font-bold">{item.departmentName}</span>
-                                                                <span className="text-slate-500 text-[9px] block">
-                                                                    {item.picksCount} {item.picksCount === 1 ? 'order' : 'orders'} • target {item.targetRate}
-                                                                </span>
-                                                            </div>
-                                                            <div className="text-right">
-                                                                <div className="flex items-center justify-end gap-1.5">
-                                                                    <span className={`font-black ${isAbove ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                                                        {item.rate} <span className="text-[9px] font-normal text-slate-400">P/H</span>
-                                                                    </span>
-                                                                    <span className={`text-[9px] font-mono font-bold px-1 py-0.2 rounded ${isNetGood ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}`}>
-                                                                        {netFormatted}
-                                                                    </span>
-                                                                </div>
-                                                                <span className="text-slate-300 font-mono text-[9px] block">
-                                                                    {item.cases} {item.cases === 1 ? 'case' : 'cases'}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    );
-                                })()}
+                {/* Case Count Unlock / Edit Modal */}
+                <CaseUnlockModal
+                    isUnlockingCaseCount={isUnlockingCaseCount}
+                    isEditingCaseCount={isEditingCaseCount}
+                    unlockPin={unlockPin}
+                    setUnlockPin={setUnlockPin}
+                    unlockError={unlockError}
+                    tempCaseCount={tempCaseCount}
+                    setTempCaseCount={setTempCaseCount}
+                    handleVerifyUnlock={handleVerifyUnlock}
+                    handleSaveModifiedCaseCount={handleSaveModifiedCaseCount}
+                    onClose={() => {
+                        setIsUnlockingCaseCount(false);
+                        setIsEditingCaseCount(false);
+                    }}
+                />
 
-                                <div className="mb-6 text-left">
-                                    <label className="block text-slate-400 text-xs font-medium uppercase mb-2">Shift Notes / Reminders</label>
-                                    <textarea 
-                                        className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-white text-sm focus:outline-none focus:border-emerald-500 min-h-[80px] focus:min-h-[140px] transition-all duration-300"
-                                        placeholder="Type any scratch notes, drop lane hints, or shift reminders here..."
-                                        value={shiftData.operatorNote || shiftNotes}
-                                        onChange={(e) => {
-                                            const val = e.target.value;
-                                            updateShiftData({ operatorNote: val });
-                                            setShiftNotes(val);
-                                            localStorage.setItem('draft_operatorNote', val);
-                                        }}
-                                    />
-                                </div>
+                {/* Confirm Dialog Overlay */}
+                <ConfirmDialogModal
+                    confirmDialog={confirmDialog}
+                    setConfirmDialog={setConfirmDialog}
+                    theme={theme}
+                />
 
-                                <div className="sticky bottom-0 bg-slate-900 pt-4 border-t border-slate-800 flex flex-wrap gap-2">
-                                    <button 
-                                        className="flex-1 py-3.5 bg-slate-800 text-white rounded-2xl font-semibold tracking-wide hover:bg-slate-700 transition-colors flex items-center justify-center gap-2 min-w-[100px]"
-                                        onClick={async () => {
-                                            haptic('light');
-                                            
-                                            // Make sure we have the rate calculation for summary
-                                            const totalActiveMinutes = shiftData.totalSteps ? shiftData.totalSteps * 3 : 0;
-                                            const totalCases = isShiftFinalized ? (finalizedStats?.totalCases || shiftData.totalCases) : shiftData.totalCases;
-                                            
-                                            // The share text
-                                            const shareText = `Shift Update: Picked ${totalCases} cases today on PickApp!`;
-                                            
-                                            const dataUrl = await takeScreenshot();
-                                            if (dataUrl) {
-                                                // Prepare file download
-                                                const link = document.createElement('a');
-                                                link.href = dataUrl;
-                                                link.download = `shift_summary_${new Date().toISOString()}.jpg`;
-                                                
-                                                try {
-                                                    await navigator.clipboard.writeText(shareText);
-                                                    
-                                                    // Web Share API if supported
-                                                    if (navigator.share) {
-                                                        const blob = await (await fetch(dataUrl)).blob();
-                                                        const file = new File([blob], 'pickapp_summary.jpg', { type: 'image/jpeg' });
-                                                        
-                                                        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                                                            await navigator.share({
-                                                                title: 'My Shift Summary',
-                                                                text: shareText,
-                                                                files: [file]
-                                                            });
-                                                            return; // Skip download if successfully shared
-                                                        }
-                                                    }
-                                                } catch (e) {
-                                                    // AbortError is thrown if user canceled the share dialog
-                                                    if ((e as Error).name === 'AbortError') return;
-                                                    // Share failure.
-                                                }
-                                                
-                                                // Fallback to basic download if share isn't supported or failed
-                                                link.click();
-                                                alert("Screenshot saved & summary copied to clipboard!");
-                                            }
-                                        }}
-                                    >
-                                        <Share size={16} /> Share & Save
-                                    </button>
-                                    <button 
-                                        className="flex-1 py-3.5 bg-slate-800 text-white rounded-2xl font-semibold tracking-wide hover:bg-slate-700 transition-colors flex items-center justify-center gap-2 min-w-[100px]"
-                                        onClick={() => downloadReport()}
-                                    >
-                                        <Download size={16} /> Report
-                                    </button>
-                                    <button 
-                                        className="flex-1 py-3.5 bg-slate-800 text-white rounded-2xl font-semibold tracking-wide hover:bg-slate-700 transition-colors flex items-center justify-center gap-2 min-w-[100px]"
-                                        onClick={async () => {
-                                            haptic('light');
-                                            const dataToUse = isShiftFinalized && finalizedStats ? finalizedStats : {
-                                                rate,
-                                                activeElapsedSeconds,
-                                                cases: shiftData.totalCases
-                                            };
-                                            const reportTxt = `PickApp Shift: ${dataToUse.cases || shiftData.totalCases} cases at ${dataToUse.rate} P/H. Steps: ${shiftData.steps}.`;
-                                            try {
-                                                await navigator.clipboard.writeText(reportTxt);
-                                                alert("Summary copied!");
-                                            } catch (e) {
-                                                alert("Copy failed.");
-                                            }
-                                        }}
-                                    >
-                                        <FileText size={16} /> Copy
-                                    </button>
-                                    <button 
-                                        className="flex-1 py-3.5 bg-slate-800 text-white rounded-2xl font-semibold tracking-wide hover:bg-slate-700 transition-colors min-w-[80px]"
-                                        onClick={() => { haptic('light'); setShowSummary(false); }}
-                                    >
-                                        Review
-                                    </button>
-                                    <button 
-                                        type="button"
-                                        className={`flex-1 py-3.5 text-white rounded-2xl font-semibold tracking-wide transition-all shadow-lg bg-emerald-500 hover:bg-emerald-400 shadow-emerald-500/20 min-w-[100px]`}
-                                        onClick={endShift}
-                                    >
-                                        FINISH & EXIT
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Case Count Unlock / Edit Modal */}
-                    {isUnlockingCaseCount && (
-                        <div className="fixed inset-0 bg-slate-950/90 flex flex-col items-center justify-center z-[200] px-6 backdrop-blur-md">
-                            <motion.div 
-                                initial={{ opacity: 0, scale: 0.9, y: 20 }}
-                                animate={{ opacity: 1, scale: 1, y: 0 }}
-                                className="bg-slate-900 p-8 rounded-[32px] w-full max-w-sm border border-slate-800 shadow-2xl relative overflow-hidden"
-                            >
-                                {/* Decorative background */}
-                                <div className={`absolute top-0 right-0 w-32 h-32 blur-[80px] rounded-full ${isEditingCaseCount ? 'bg-purple-500/20' : 'bg-amber-500/10'}`} />
-                                
-                                <div className="relative z-10">
-                                    <div className="flex justify-between items-start mb-6">
-                                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${isEditingCaseCount ? 'bg-purple-500/20 text-purple-400' : 'bg-amber-500/20 text-amber-400'}`}>
-                                            {isEditingCaseCount ? <Box size={24} /> : <ShieldAlert size={24} />}
-                                        </div>
-                                        <button 
-                                            onClick={() => { setIsUnlockingCaseCount(false); setIsEditingCaseCount(false); haptic('light'); }}
-                                            className="p-2 rounded-full hover:bg-slate-800 transition-colors text-slate-500"
-                                        >
-                                            <X size={20} />
-                                        </button>
-                                    </div>
-
-                                    {!isEditingCaseCount ? (
-                                        <>
-                                            <h3 className="text-white text-2xl font-black mb-2 tracking-tight">Security Check</h3>
-                                            <p className="text-slate-400 text-sm mb-8 leading-relaxed">Please enter your password to unlock order modifications.</p>
-                                            
-                                            <div className="space-y-4">
-                                                <div className="relative">
-                                                    <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                                                    <input 
-                                                        type="password"
-                                                        value={unlockPin}
-                                                        onChange={(e) => setUnlockPin(e.target.value)}
-                                                        onKeyDown={(e) => e.key === 'Enter' && handleVerifyUnlock()}
-                                                        placeholder="••••••"
-                                                        className={`w-full bg-slate-950 border ${unlockError ? 'border-red-500/50' : 'border-slate-800'} p-4 pl-12 rounded-2xl text-white outline-none focus:border-amber-500/50 transition-all font-black tracking-widest`}
-                                                        autoFocus
-                                                    />
-                                                </div>
-
-                                                {unlockError && (
-                                                    <p className="text-red-400 text-xs font-bold px-2">{unlockError}</p>
-                                                )}
-
-                                                <button 
-                                                    onClick={handleVerifyUnlock}
-                                                    className="w-full py-4 bg-amber-500 text-slate-950 font-black rounded-2xl shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 active:scale-95 transition-transform"
-                                                >
-                                                    UNLOCK <ChevronRight size={18} />
-                                                </button>
-                                            </div>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <h3 className="text-purple-400 text-2xl font-black mb-2 tracking-tight">Modify Order</h3>
-                                            <p className="text-slate-400 text-sm mb-8 leading-relaxed">Update the case count for the active pick. This will be marked as a manual correction.</p>
-                                            
-                                            <div className="space-y-4">
-                                                <div className="space-y-2">
-                                                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest pl-1">New Case Count</label>
-                                                    <div className="relative">
-                                                        <Box className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                                                        <input 
-                                                            type="number"
-                                                            inputMode="numeric"
-                                                            value={tempCaseCount}
-                                                            onChange={(e) => setTempCaseCount(e.target.value)}
-                                                            placeholder="0"
-                                                            className="w-full bg-slate-950 border border-slate-800 p-4 pl-12 rounded-2xl text-white outline-none focus:border-purple-500/50 transition-all font-black"
-                                                            autoFocus
-                                                        />
-                                                    </div>
-                                                </div>
-
-                                                <button 
-                                                    onClick={handleSaveModifiedCaseCount}
-                                                    className="w-full py-4 bg-purple-500 text-white font-black rounded-2xl shadow-lg shadow-purple-500/20 flex items-center justify-center gap-2 active:scale-95 transition-transform"
-                                                >
-                                                    SAVE CORRECTION <CheckCircle size={18} />
-                                                </button>
-                                            </div>
-                                        </>
-                                    )}
-                                </div>
-                            </motion.div>
-                        </div>
-                    )}
-
-                    {/* Confirm Dialog Overlay */}
-                    {confirmDialog && (
-                        <div className="fixed inset-0 bg-slate-950/80 flex flex-col items-center justify-center z-[500] px-4 backdrop-blur-sm">
-                            <div className="bg-slate-900 p-6 rounded-3xl w-full max-w-[320px] text-center border border-slate-800 shadow-2xl animate-in zoom-in-95 duration-200">
-                                <h3 className="text-white text-xl font-bold mb-2 tracking-tight">{confirmDialog.title}</h3>
-                                <p className="text-slate-400 mb-8 text-sm">{confirmDialog.message}</p>
-                                <div className="flex gap-3">
-                                    {!confirmDialog.isAlert && (
-                                        <button 
-                                            className="flex-1 py-3.5 bg-slate-800 text-white rounded-2xl font-semibold tracking-wide hover:bg-slate-700 transition-colors"
-                                            onClick={() => { haptic('light'); confirmDialog.onCancel(); setConfirmDialog(null); }}
-                                        >
-                                            Cancel
-                                        </button>
-                                    )}
-                                    <button 
-                                        className={`flex-1 py-3.5 text-white rounded-2xl font-semibold tracking-wide transition-colors shadow-lg ${confirmDialog.title.includes('Clear') || confirmDialog.title.includes('Reset') ? 'bg-red-500 hover:bg-red-400 shadow-red-500/20' : `${theme.bg} ${theme.bgHover} ${theme.shadow}`}`}
-                                        onClick={() => { haptic('medium'); confirmDialog.onConfirm(); setConfirmDialog(null); }}
-                                    >
-                                        {confirmDialog.isAlert ? 'OK' : 'Confirm'}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Install Tutorial Overlay */}
-                    {showInstallTutorial && (
-                        <AnimatePresence>
-                            <motion.div 
-                                initial={{ opacity: 0, scale: 0.95, y: 50 }} 
-                                animate={{ opacity: 1, scale: 1, y: 0 }} 
-                                exit={{ opacity: 0, scale: 0.95, y: 50 }}
-                                className="fixed bottom-6 left-0 right-0 z-[200] mx-4 pointer-events-auto"
-                            >
-                                <div className={`${theme.bg} rounded-3xl p-5 shadow-2xl relative border border-white/10 overflow-hidden`}>
-                                    <button 
-                                        className="absolute top-4 right-4 text-white/50 hover:text-white transition-colors"
-                                        onClick={() => {
-                                            haptic('light');
-                                            localStorage.setItem('hideInstallTutorial', 'true');
-                                            setShowInstallTutorial(false);
-                                        }}
-                                    >
-                                        <X size={20} />
-                                    </button>
-                                    
-                                    <div className="flex gap-4 items-center mb-4 pr-6">
-                                        <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center shrink-0">
-                                            <Download className="text-white" size={24} />
-                                        </div>
-                                        <div>
-                                            <h3 className="text-white font-bold text-lg leading-tight">Install PickApp</h3>
-                                            <p className="text-white/70 text-xs">Add to home screen for the full app experience</p>
-                                        </div>
-                                    </div>
-                                    
-                                    <div className="space-y-4">
-                                        {/* iOS Instructions */}
-                                        <div className="bg-black/20 rounded-2xl p-4">
-                                            <div className="flex items-center gap-2 mb-2">
-                                                <div className="px-2 py-0.5 bg-white/10 rounded text-[9px] font-bold text-white uppercase">iOS / Safari</div>
-                                            </div>
-                                            <ol className="text-sm text-white/80 space-y-2 ml-1">
-                                                <li className="flex gap-2 items-center"><span className="w-4 h-4 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold shrink-0">1</span> Tap the <Share2 size={16} className="inline mx-1" /> Share button</li>
-                                                <li className="flex gap-2 items-center"><span className="w-4 h-4 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold shrink-0">2</span> Scroll and select <span className="font-semibold bg-white/10 px-1.5 rounded inline-flex items-center gap-1"><PlusSquare size={12} /> Add to Home Screen</span></li>
-                                            </ol>
-                                        </div>
-                                        
-                                        {/* Android Instructions */}
-                                        <div className="bg-black/20 rounded-2xl p-4">
-                                            <div className="flex items-center gap-2 mb-2">
-                                                <div className="px-2 py-0.5 bg-white/10 rounded text-[9px] font-bold text-white uppercase">Android / Chrome</div>
-                                            </div>
-                                            <ol className="text-sm text-white/80 space-y-2 ml-1">
-                                                <li className="flex gap-2 items-center"><span className="w-4 h-4 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold shrink-0">1</span> Tap the <MoreVertical size={16} className="inline mx-1" /> Menu button</li>
-                                                <li className="flex gap-2 items-center"><span className="w-4 h-4 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold shrink-0">2</span> Select <span className="font-semibold bg-white/10 px-1.5 rounded">Install app</span> or <span className="font-semibold bg-white/10 px-1.5 rounded">Add to Home screen</span></li>
-                                            </ol>
-                                        </div>
-                                    </div>
-                                    
-                                    <button 
-                                        className="w-full mt-5 py-3.5 bg-white/10 hover:bg-white/20 text-white rounded-xl font-bold transition-all active:scale-95"
-                                        onClick={() => {
-                                            haptic('medium');
-                                            localStorage.setItem('hideInstallTutorial', 'true');
-                                            setShowInstallTutorial(false);
-                                        }}
-                                    >
-                                        I Understand
-                                    </button>
-                                </div>
-                            </motion.div>
-                        </AnimatePresence>
-                    )}
+                {/* Install Tutorial Overlay */}
+                <InstallTutorialModal
+                    isOpen={showInstallTutorial}
+                    onClose={() => setShowInstallTutorial(false)}
+                    theme={theme}
+                />
 
             {/* About PickApp Section */}
             <AboutPickApp isOpen={showAbout} onClose={() => setShowAbout(false)} />
