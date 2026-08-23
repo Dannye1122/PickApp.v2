@@ -1,0 +1,70 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Helpers
+    function isSignedIn() { return request.auth != null; }
+
+    // 1. Users
+    match /users/{userId} {
+      allow read, write: if true;
+
+      match /shifts/{shiftId} {
+        allow read, write: if true;
+      }
+    }
+
+    // 2. Leaderboard & Summaries
+    match /leaderboard/{entryId} {
+      allow read, write: if true;
+    }
+    
+    match /shift_summaries/{summaryId} {
+      allow read, write: if true;
+    }
+
+    // 3. Settings & Config
+    match /warehouse_settings/{docId} {
+      allow read, write: if true;
+    }
+
+    match /global_config/{docId} {
+      allow read, write: if true;
+    }
+
+    // 4. Logs
+    match /beta_feedback_logs {
+      allow read, write: if true;
+    }
+    
+    match /beta_feedback_logs/{docId} {
+      allow read, write: if true;
+    }
+
+    // 5. Warehouses
+    match /warehouses/{warehouseId} {
+      allow read, write: if true;
+      
+      match /leaderboard/{entryId} {
+        allow read, write: if true;
+      }
+
+      match /live_users/{userId} {
+        allow read, write: if true;
+      }
+
+      match /config {
+        allow read, write: if true;
+      }
+
+      match /shifts/{shiftId} {
+        allow read, write: if true;
+      }
+    }
+
+    // Default catch-all
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

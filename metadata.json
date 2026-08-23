@@ -1,0 +1,11 @@
+{
+  "name": "PickApp",
+  "description": "A premium, high-performance logistics productivity platform engineered for rugged warehouse environments. Features ergonomic touch-optimized interfaces, real-time telemetry, biometric authentication, and high-contrast visuals designed for peak situational awareness under industrial lighting.",
+  "requestFramePermissions": [
+    "screen-wake-lock",
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

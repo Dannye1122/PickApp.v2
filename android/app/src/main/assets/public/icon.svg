@@ -1,0 +1,24 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#002c77;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00abe1;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Background Rounded Square -->
+  <rect x="0" y="0" width="1024" height="1024" rx="200" fill="url(#bg-grad)" />
+  
+  <!-- Stylized Box/Package -->
+  <path d="M300 400 L512 300 L724 400 L724 650 L512 750 L300 650 Z" fill="#ffffff" stroke="#002c77" stroke-width="20" />
+  <path d="M300 400 L512 500 L724 400" fill="none" stroke="#002c77" stroke-width="20" />
+  <path d="M512 500 L512 750" fill="none" stroke="#002c77" stroke-width="20" />
+  
+  <!-- Checkmark -->
+  <circle cx="750" cy="750" r="180" fill="#ff8200" stroke="#ffffff" stroke-width="15" />
+  <path d="M660 750 L720 810 L840 690" fill="none" stroke="#ffffff" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" />
+  
+  <!-- Speed Lines -->
+  <line x1="200" y1="450" x2="100" y2="450" stroke="#ffffff" stroke-width="15" stroke-linecap="round" />
+  <line x1="180" y1="520" x2="80" y2="520" stroke="#ffffff" stroke-width="15" stroke-linecap="round" />
+  <line x1="220" y1="590" x2="120" y2="590" stroke="#ffffff" stroke-width="15" stroke-linecap="round" />
+</svg>

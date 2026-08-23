@@ -1,0 +1,108 @@
+{
+  "entities": {
+    "LeaderboardEntry": {
+      "title": "Leaderboard Entry",
+      "description": "A record of a completed shift performance for the leaderboard",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Operator name" },
+        "rate": { "type": "number", "description": "Picks per hour" },
+        "department": { "type": "string", "description": "Department name" },
+        "date": { "type": "string", "format": "date", "description": "Date of the shift" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "Record creation timestamp" }
+      },
+      "required": ["name", "rate", "department", "date", "timestamp"]
+    },
+    "User": {
+      "title": "User",
+      "description": "App user for authentication and personalization",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "username": { "type": "string" },
+        "pin": { "type": "string" },
+        "settings": { "type": "object", "description": "User preferences" }
+      },
+      "required": ["uid", "username", "pin"]
+    },
+    "LiveStatus": {
+      "title": "Live Status",
+      "description": "Real-time activity status of an operator",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "rate": { "type": "number" },
+        "department": { "type": "string" },
+        "totalCases": { "type": "number" },
+        "activeSeconds": { "type": "number" },
+        "status": { "type": "string", "enum": ["picking", "idle", "break", "finished"] },
+        "lastUpdate": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "rate", "department", "status", "lastUpdate"]
+    },
+    "Shift": {
+      "title": "Shift",
+      "description": "A record of a user's completed shift",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "startTime": { "type": "string", "format": "date-time" },
+        "endTime": { "type": "string", "format": "date-time" },
+        "totalCases": { "type": "number" },
+        "department": { "type": "string" },
+        "shiftData": { "type": "object", "description": "Snapshot of shift data" }
+      },
+      "required": ["userId", "startTime", "endTime"]
+    }
+  },
+  "firestore": {
+    "/warehouses/{warehouseId}/leaderboard/{entryId}": {
+      "schema": "LeaderboardEntry",
+      "description": "Warehouse-specific leaderboard entries"
+    },
+    "/warehouses/{warehouseId}/live_users/{userId}": {
+      "schema": "LiveStatus",
+      "description": "Real-time activity monitoring for a specific warehouse"
+    },
+    "/warehouses/{warehouseId}/config": {
+      "schema": "WarehouseSettings",
+      "description": "Configurable metrics and thresholds for a specific warehouse"
+    },
+    "/warehouses/{warehouseId}/shifts/{shiftId}": {
+      "schema": "Shift",
+      "description": "Historical shift records for administrative reporting within a warehouse"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Global user profiles"
+    },
+    "/users/{userId}/shifts/{shiftId}": {
+      "schema": "Shift",
+      "description": "User shift history"
+    },
+    "/leaderboard/{entryId}": {
+      "schema": "LeaderboardEntry",
+      "description": "Global leaderboard entries"
+    },
+    "/shift_summaries/{summaryId}": {
+      "schema": "Shift",
+      "description": "Global shift summaries"
+    },
+    "/shift_photos/{photoId}": {
+      "schema": "Shift",
+      "description": "Shift label and proof photos"
+    },
+    "/warehouse_settings/{docId}": {
+      "schema": "WarehouseSettings",
+      "description": "Warehouse settings configuration"
+    },
+    "/global_config/{docId}": {
+      "schema": "WarehouseSettings",
+      "description": "Global configuration settings"
+    },
+    "/beta_feedback_logs/{docId}": {
+      "schema": "User",
+      "description": "Beta feedback logs"
+    }
+  }
+}

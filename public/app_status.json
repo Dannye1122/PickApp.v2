@@ -1,0 +1,11 @@
+{
+  "version": "1.7.0",
+  "releaseDate": "2026-05-16",
+  "notes": [
+    "Remote Update Checking: Never miss a build again.",
+    "Capacitor Native Plugin Support: Better haptics and sharing on APK.",
+    "Logic Profiles: Toggle between v1.2.1 and v1.3.0 features in Settings.",
+    "UI Improvements: Update badges and improved dark mode consistency."
+  ],
+  "downloadUrl": "https://github.com/SERGHIE-DANIEL/PickApp-Android/releases/latest"
+}
