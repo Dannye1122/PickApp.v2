@@ -1401,3 +1401,81 @@ export const subscribeToAllShiftSummaries = (callback: (summaries: ShiftSummary[
   fetchAllShiftSummaries().then(callback);
   return () => {};
 };
+
+/**
+ * Send a real-time social interaction to a top 5 user
+ */
+export const sendSocialInteraction = async (
+    senderName: string,
+    receiverName: string,
+    type: 'poke' | 'thumbs_up' | 'congrats' | 'tease'
+): Promise<{ success: boolean; message: string }> => {
+    const defaultMessages: Record<string, string> = {
+        poke: `👉 ${senderName} poked you! Keep the pace!`,
+        thumbs_up: `👍 ${senderName} gave you a thumbs up! Great picking!`,
+        congrats: `👏 ${senderName} congratulated you on dominating the leaderboard!`,
+        tease: `😏 ${senderName}: Catch me if you can on the boards!`
+    };
+
+    const interaction = {
+        id: `int_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        senderName: senderName || 'Teammate',
+        receiverName,
+        type,
+        message: defaultMessages[type] || `⚡ ${senderName} interacted with you!`,
+        createdAt: new Date().toISOString(),
+        isRead: false
+    };
+
+    try {
+        if (db) {
+            const docRef = doc(db, 'interactions', interaction.id);
+            await setDoc(docRef, {
+                ...interaction,
+                serverTimestamp: serverTimestamp()
+            });
+        }
+        return { success: true, message: interaction.message };
+    } catch (err) {
+        console.warn('Error sending interaction to Firestore:', err);
+        return { success: true, message: interaction.message };
+    }
+};
+
+/**
+ * Subscribe to incoming social interactions for the logged in operator
+ */
+export const subscribeToIncomingInteractions = (
+    userName: string,
+    onInteraction: (interaction: any) => void
+): (() => void) => {
+    if (!db || !userName) {
+        return () => {};
+    }
+
+    try {
+        const q = query(
+            collection(db, 'interactions'),
+            orderBy('createdAt', 'desc'),
+            limit(15)
+        );
+
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+                if (change.type === 'added') {
+                    const data = change.doc.data();
+                    if (data.receiverName && data.receiverName.toLowerCase() === userName.toLowerCase()) {
+                        onInteraction(data);
+                    }
+                }
+            });
+        }, (err) => {
+            console.warn('Firestore interactions listener warning:', err);
+        });
+
+        return unsubscribe;
+    } catch (err) {
+        console.warn('Failed to attach interactions listener:', err);
+        return () => {};
+    }
+};

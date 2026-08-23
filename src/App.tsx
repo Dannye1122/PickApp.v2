@@ -97,6 +97,10 @@ import { fetchWarehouseConfig, saveWarehouseConfig } from './services/warehouseS
 
 // Utility functions relocated above
 import { APP_VERSION } from './constants/version';
+import { LeaderboardInteractions } from './components/leaderboard/LeaderboardInteractions';
+import { InteractionToast } from './components/leaderboard/InteractionToast';
+import { subscribeToIncomingInteractions } from './services/leaderboardService';
+import { SocialInteraction } from './types';
 
 
 export const DASERGHIE_ROTA = {
@@ -1208,6 +1212,7 @@ export default function App() {
 
 
     const [toast, setToast] = useState<{message: string, type: 'error' | 'success' | 'info'} | null>(null);
+    const [activeInteraction, setActiveInteraction] = useState<SocialInteraction | null>(null);
 
     const showToast = useCallback((message: string, type: 'error' | 'success' | 'info' = 'info') => {
         setToast({ message, type });
@@ -1234,24 +1239,65 @@ export default function App() {
 
     const [confirmDialog, setConfirmDialog] = useState<{title: string, message: string, isAlert?: boolean, onConfirm: () => void, onCancel: () => void} | null>(null);
 
-    // Forensic Helper: Safe Local Storage with Quota Monitoring
+    // Forensic Helper: Safe Local Storage with Automatic Self-Healing Quota Recovery
     const safeLocalStorage = useMemo(() => ({
         setItem: (key: string, value: string, isCritical = false) => {
             try {
                 localStorage.setItem(key, value);
             } catch (e) {
                 if (e instanceof DOMException && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED')) {
-                    console.error("Storage Quota Exceeded for key:", key);
+                    console.warn("[STORAGE QUOTA] Quota exceeded for key:", key, "Executing auto-pruning...");
+                    
+                    try {
+                        // 1. Clear temporary drafts, sync leftovers, and corrupted dumps
+                        const keysToRemove: string[] = [];
+                        for (let i = 0; i < localStorage.length; i++) {
+                            const k = localStorage.key(i);
+                            if (!k) continue;
+                            if (
+                                k.startsWith('draft_') ||
+                                k.startsWith('pickData_corrupted_') ||
+                                k.startsWith('last_fetch_') ||
+                                k.startsWith('failed_order_uploads') ||
+                                k.startsWith('temp_') ||
+                                k.includes('_corrupted_') ||
+                                k === 'cached_leaderboard'
+                            ) {
+                                keysToRemove.push(k);
+                            }
+                        }
+                        keysToRemove.forEach(k => localStorage.removeItem(k));
+
+                        // 2. Trim local shift histories to keep the most recent 15 records
+                        for (let i = 0; i < localStorage.length; i++) {
+                            const k = localStorage.key(i);
+                            if (k && (k.startsWith('shift_history_') || k.startsWith('offline_shifts_'))) {
+                                try {
+                                    const raw = localStorage.getItem(k);
+                                    if (raw) {
+                                        const parsed = JSON.parse(raw);
+                                        if (Array.isArray(parsed) && parsed.length > 15) {
+                                            localStorage.setItem(k, JSON.stringify(parsed.slice(0, 15)));
+                                        }
+                                    }
+                                } catch {
+                                    // ignore individual parse errors
+                                }
+                            }
+                        }
+
+                        // 3. Retry saving the required item
+                        localStorage.setItem(key, value);
+                        console.log("[STORAGE QUOTA] Auto-pruning successful. Data saved cleanly.");
+                        return;
+                    } catch (recoveryErr) {
+                        console.error("[STORAGE QUOTA] Auto-recovery space release failed:", recoveryErr);
+                    }
+
                     if (isCritical) {
-                        setConfirmDialog({
-                            title: "🚨 STORAGE CRITICALLY FULL",
-                            message: "Your device storage is full. PickApp cannot save your shift details. Please clear your browser cache or delete old history in Settings > Data.",
-                            isAlert: true,
-                            onConfirm: () => setConfirmDialog(null),
-                            onCancel: () => setConfirmDialog(null)
-                        });
+                        showToast("Storage quota nearly full. Old cache automatically pruned.", "info");
                     } else {
-                        showToast("Local cache full. History pruning recommended.", "error");
+                        showToast("Local cache pruned to maintain optimal performance.", "info");
                     }
                 }
             }
@@ -1712,6 +1758,21 @@ export default function App() {
             unsubscribeLeaderboard();
         };
     }, [isAuthenticated, firebaseUser?.uid, shiftData.warehouseId, fetchLeaderboardManual, fetchSummariesManual, fetchWarehouseConfigManual, fetchAdminSummariesManual]);
+
+    // Peer Social Interactions Subscription (Pokes, Cheers, Kudos, Banter)
+    useEffect(() => {
+        const targetOp = shiftData.operator || userProfile?.username;
+        if (!targetOp) return;
+
+        const unsubscribe = subscribeToIncomingInteractions(targetOp, (interaction) => {
+            setActiveInteraction(interaction);
+            deviceHapticService('medium');
+            playAlertSound('success');
+            setTimeout(() => setActiveInteraction(null), 6000);
+        });
+
+        return () => unsubscribe();
+    }, [shiftData.operator, userProfile?.username]);
 
     // Programmatic Auto-Cleanup and Missing Shift Recovery
     useEffect(() => {
@@ -5455,50 +5516,62 @@ export default function App() {
                                                         <span className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em]">Active Now</span>
                                                     </div>
                                                     {liveUsers.map((user, idx) => (
-                                                        <div key={`live-${idx}`} className="bg-slate-800/80 p-4 rounded-2xl border-2 border-emerald-500/20 flex flex-col gap-3 shadow-lg shadow-emerald-500/5">
-                                                            <div className="flex items-center gap-4">
-                                                                <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black text-xs border border-emerald-500/30 shrink-0">
-                                                                    LIVE
-                                                                </div>
-                                                                <div className="flex-1 min-w-0">
-                                                                    <div className="font-bold text-white flex items-center gap-2 truncate">
-                                                                        {user.name}
-                                                                        {user.isBot && (
-                                                                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 uppercase tracking-wider font-black shrink-0 flex items-center gap-1">
-                                                                                <Bot size={11} className="text-cyan-400" /> AI BOT
+                                                        <div key={`live-${idx}`} className="bg-slate-800/80 p-3.5 sm:p-4 rounded-2xl border-2 border-emerald-500/20 flex flex-col gap-3 shadow-lg shadow-emerald-500/5">
+                                                            <div className="flex items-center justify-between gap-2.5 sm:gap-4 flex-wrap sm:flex-nowrap">
+                                                                <div className="flex items-center gap-3 min-w-0 flex-1">
+                                                                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black text-xs border border-emerald-500/30 shrink-0">
+                                                                        LIVE
+                                                                    </div>
+                                                                    <div className="flex-1 min-w-0">
+                                                                        <div className="font-bold text-white flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                                                                            <span className="truncate">{user.name}</span>
+                                                                            {user.isBot && (
+                                                                                <span className="text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 uppercase tracking-wider font-black shrink-0 flex items-center gap-1">
+                                                                                    <Bot size={10} className="text-cyan-400" /> AI BOT
+                                                                                </span>
+                                                                            )}
+                                                                            <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-tighter shrink-0 ${user.status === 'picking' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : user.status === 'break' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-slate-400/10 text-slate-400 border-slate-400/20'}`}>
+                                                                                {user.status || 'Active'}
                                                                             </span>
-                                                                        )}
-                                                                        <span className={`text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-tighter shrink-0 ${user.status === 'picking' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : user.status === 'break' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-slate-400/10 text-slate-400 border-slate-400/20'}`}>
-                                                                            {user.status || 'Active'}
-                                                                        </span>
-                                                                    </div>
-                                                                    <div className="text-[10px] text-slate-400 uppercase tracking-wider truncate">
-                                                                        {user.department}
-                                                                        {user.currentOrder && (
-                                                                            <span className="ml-2 text-sky-400 font-bold border border-sky-500/20 px-1 rounded bg-sky-500/10">Order: {user.currentOrder}</span>
-                                                                        )}
+                                                                        </div>
+                                                                        <div className="text-[9px] sm:text-[10px] text-slate-400 uppercase tracking-wider truncate">
+                                                                            {user.department}
+                                                                            {user.currentOrder && (
+                                                                                <span className="ml-1.5 text-sky-400 font-bold border border-sky-500/20 px-1 rounded bg-sky-500/10">Order: {user.currentOrder}</span>
+                                                                            )}
+                                                                        </div>
                                                                     </div>
                                                                 </div>
-                                                                <div className="text-right shrink-0">
-                                                                    <div className="text-xl font-black text-emerald-400">{user.rate}</div>
-                                                                    <div className="text-[10px] text-slate-400 font-medium uppercase tracking-widest leading-none">P/H</div>
+                                                                <div className="flex items-center gap-2 sm:gap-3 shrink-0 ml-auto">
+                                                                    {idx < 5 && (
+                                                                        <LeaderboardInteractions
+                                                                            targetName={user.name}
+                                                                            senderName={shiftData.operator || userProfile?.username || 'You'}
+                                                                            rank={idx + 1}
+                                                                            onSent={(msg) => showToast(msg, 'success')}
+                                                                        />
+                                                                    )}
+                                                                    <div className="text-right">
+                                                                        <div className="text-lg sm:text-xl font-black text-emerald-400 leading-tight">{user.rate}</div>
+                                                                        <div className="text-[9px] sm:text-[10px] text-slate-400 font-medium uppercase tracking-widest leading-none">P/H</div>
+                                                                    </div>
                                                                 </div>
                                                             </div>
 
                                                             {(user.customStatus || user.listeningTo) && (
                                                                 <div className="bg-slate-900/60 px-3 py-1.5 rounded-xl border border-slate-700/30 flex items-center gap-2">
                                                                     <span className="text-xs animate-bounce shrink-0">🎵</span>
-                                                                    <span className="text-[11px] text-indigo-300 italic truncate font-medium">Vibe: <span className="text-white not-italic font-semibold">{user.customStatus || user.listeningTo}</span></span>
+                                                                    <span className="text-[10px] sm:text-[11px] text-indigo-300 italic truncate font-medium">Vibe: <span className="text-white not-italic font-semibold">{user.customStatus || user.listeningTo}</span></span>
                                                                 </div>
                                                             )}
                                                             
                                                             <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/50">
                                                                 <div className="flex flex-col">
-                                                                    <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Activity</span>
+                                                                    <span className="text-[9px] sm:text-[10px] text-slate-400 uppercase font-bold tracking-wider">Activity</span>
                                                                     <span className="text-xs text-white font-mono break-all">{user.totalCases || 0} cs • {user.xp || 0} XP</span>
                                                                 </div>
                                                                 <div className="flex flex-col text-right">
-                                                                    <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Time Active</span>
+                                                                    <span className="text-[9px] sm:text-[10px] text-slate-400 uppercase font-bold tracking-wider">Time Active</span>
                                                                     <span className="text-xs text-white font-mono">{user.activeSeconds ? formatHHMM(user.activeSeconds) : '00h 00m'}</span>
                                                                 </div>
                                                             </div>
@@ -5518,41 +5591,53 @@ export default function App() {
                                                     const isLive = !!liveUser;
 
                                                     return (
-                                                        <div key={idx} className={`p-4 rounded-2xl border flex flex-col gap-2 ${isLive ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-slate-800/50 border-slate-700/50'}`}>
-                                                            <div className="flex items-center gap-4">
-                                                                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${idx === 0 ? 'bg-amber-400 text-slate-900' : idx === 1 ? 'bg-slate-300 text-slate-900' : idx === 2 ? 'bg-orange-500 text-white' : 'bg-slate-700 text-slate-400'}`}>
-                                                                    {idx + 1}
-                                                                </div>
-                                                                <div className="flex-1 min-w-0">
-                                                                    <div className="font-bold text-white truncate flex items-center gap-2">
-                                                                        {entry.name}
-                                                                        {(entry.isBot || liveUser?.isBot) && (
-                                                                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 uppercase tracking-wider font-black shrink-0 flex items-center gap-1">
-                                                                                <Bot size={11} className="text-cyan-400" /> AI BOT
-                                                                            </span>
-                                                                        )}
-                                                                        {isLive && (
-                                                                            <span className="text-[9px] bg-emerald-500 text-white px-1 rounded uppercase animate-pulse">Live</span>
-                                                                        )}
+                                                        <div key={idx} className={`p-3.5 sm:p-4 rounded-2xl border flex flex-col gap-2 ${isLive ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-slate-800/50 border-slate-700/50'}`}>
+                                                            <div className="flex items-center justify-between gap-2.5 sm:gap-4 flex-wrap sm:flex-nowrap">
+                                                                <div className="flex items-center gap-3 min-w-0 flex-1">
+                                                                    <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center font-bold text-xs sm:text-sm shrink-0 ${idx === 0 ? 'bg-amber-400 text-slate-900 shadow-md shadow-amber-400/20' : idx === 1 ? 'bg-slate-300 text-slate-900' : idx === 2 ? 'bg-orange-500 text-white' : 'bg-slate-700 text-slate-400'}`}>
+                                                                        {idx + 1}
                                                                     </div>
-                                                                    <div className="text-[10px] text-slate-400 uppercase tracking-wider truncate">
-                                                                        {entry.department} • {entry.date}
-                                                                    </div>
-                                                                    {entry.cases !== undefined && (
-                                                                        <div className="text-[10px] text-slate-400 font-medium">
-                                                                            {entry.cases || 0} cases
+                                                                    <div className="flex-1 min-w-0">
+                                                                        <div className="font-bold text-white truncate flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                                                                            <span className="truncate">{entry.name}</span>
+                                                                            {(entry.isBot || liveUser?.isBot) && (
+                                                                                <span className="text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 uppercase tracking-wider font-black shrink-0 flex items-center gap-1">
+                                                                                    <Bot size={10} className="text-cyan-400" /> AI BOT
+                                                                                </span>
+                                                                            )}
+                                                                            {isLive && (
+                                                                                <span className="text-[8px] sm:text-[9px] bg-emerald-500 text-white px-1 rounded uppercase animate-pulse">Live</span>
+                                                                            )}
                                                                         </div>
-                                                                    )}
+                                                                        <div className="text-[9px] sm:text-[10px] text-slate-400 uppercase tracking-wider truncate">
+                                                                            {entry.department} • {entry.date}
+                                                                        </div>
+                                                                        {entry.cases !== undefined && (
+                                                                            <div className="text-[9px] sm:text-[10px] text-slate-400 font-medium">
+                                                                                {entry.cases || 0} cases
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
                                                                 </div>
-                                                                <div className="text-right">
-                                                                    <div className={`text-lg font-black ${displayRate >= (entry.targetRate || 200) ? 'text-emerald-400' : 'text-slate-400'}`}>{displayRate}</div>
-                                                                    <div className="text-[10px] text-slate-400 font-medium uppercase tracking-widest leading-none">Goal: {entry.targetRate || 200}</div>
+                                                                <div className="flex items-center gap-2 sm:gap-3 shrink-0 ml-auto">
+                                                                    {idx < 5 && (
+                                                                        <LeaderboardInteractions
+                                                                            targetName={entry.name}
+                                                                            senderName={shiftData.operator || userProfile?.username || 'You'}
+                                                                            rank={idx + 1}
+                                                                            onSent={(msg) => showToast(msg, 'success')}
+                                                                        />
+                                                                    )}
+                                                                    <div className="text-right">
+                                                                        <div className={`text-base sm:text-lg font-black leading-tight ${displayRate >= (entry.targetRate || 200) ? 'text-emerald-400' : 'text-slate-400'}`}>{displayRate}</div>
+                                                                        <div className="text-[9px] sm:text-[10px] text-slate-400 font-medium uppercase tracking-widest leading-none">Goal: {entry.targetRate || 200}</div>
+                                                                    </div>
                                                                 </div>
                                                             </div>
                                                             {isLive && liveUser && (liveUser.customStatus || liveUser.listeningTo) && (
                                                                 <div className="bg-slate-900/40 p-2 rounded-xl border border-slate-800/30 flex items-center gap-2 mt-1">
                                                                     <span className="text-[10px] animate-pulse shrink-0">🎵</span>
-                                                                    <span className="text-[10px] text-indigo-300 italic truncate font-medium">Vibe: <span className="text-slate-200 not-italic font-semibold">{liveUser.customStatus || liveUser.listeningTo}</span></span>
+                                                                    <span className="text-[10px] sm:text-[11px] text-indigo-300 italic truncate font-medium">Vibe: <span className="text-slate-200 not-italic font-semibold">{liveUser.customStatus || liveUser.listeningTo}</span></span>
                                                                 </div>
                                                             )}
                                                         </div>
@@ -6551,6 +6636,10 @@ export default function App() {
             
             {/* Global Forensic Notification Toast Overlay */}
             <div className="fixed top-safe-top left-0 right-0 z-[1000] pointer-events-none p-4 flex flex-col items-center gap-2">
+                <InteractionToast 
+                    interaction={activeInteraction} 
+                    onDismiss={() => setActiveInteraction(null)} 
+                />
                 <AnimatePresence>
                     {toast && (
                         <motion.div

@@ -142,3 +142,15 @@ export interface ThemeColors {
     font: string;
     panel: string;
 }
+
+export type InteractionType = 'poke' | 'thumbs_up' | 'congrats' | 'tease';
+
+export interface SocialInteraction {
+  id: string;
+  senderName: string;
+  receiverName: string;
+  type: InteractionType;
+  message: string;
+  createdAt: string;
+  isRead?: boolean;
+}
