@@ -470,39 +470,22 @@ export const deleteShiftSummary = async (docId: string, userName: string, clockI
       }
     }
 
-    // 1. IndexedDB cleanup (STORES.SHIFT_HISTORY)
-    try {
-      const localDbItems = await getAllLocalItems<any>(STORES.SHIFT_HISTORY);
-      for (const item of localDbItems) {
-        const isMatchDocId = item.id === docId;
-        const isMatchClockIn = clockInTime && item.clockInTime === clockInTime;
-        const isMatchUserAndApproxTime = opSafe && (item.userName || '').toUpperCase().trim() === opSafe && clockInTime && Math.abs((item.clockInTime || 0) - clockInTime) < 5000;
-        if (isMatchDocId || isMatchClockIn || isMatchUserAndApproxTime) {
-          if (item.id) {
-            await deleteLocalItem(STORES.SHIFT_HISTORY, item.id);
-          }
-        }
-      }
-    } catch (err) {
-      console.warn("Failed to clean IndexedDB shift history:", err);
-    }
-
     // 2. Offline sync queue cleanup
     try {
-      const offlineQueueStr = localStorage.getItem('offline_sync_queue');
-      if (offlineQueueStr) {
-        let queue = JSON.parse(offlineQueueStr);
-        if (Array.isArray(queue)) {
-          queue = queue.filter((t: any) => {
-            if (t.type !== 'shiftSummary') return true;
-            if (t.payload?.docId === docId) return false;
-            if (clockInTime && t.payload?.summaryData?.clockInTime === clockInTime) return false;
-            return true;
-          });
-          localStorage.setItem('offline_sync_queue', JSON.stringify(queue));
+        const offlineQueueStr = localStorage.getItem('offline_sync_queue');
+        if (offlineQueueStr) {
+          let queue = JSON.parse(offlineQueueStr);
+          if (Array.isArray(queue)) {
+            queue = queue.filter((t: any) => {
+              if (t.type !== 'shiftSummary') return true;
+              if (t.payload?.docId === docId) return false;
+              if (clockInTime && t.payload?.summaryData?.clockInTime === clockInTime) return false;
+              return true;
+            });
+            localStorage.setItem('offline_sync_queue', JSON.stringify(queue));
+          }
         }
-      }
-    } catch (e) {}
+      } catch (e) {}
 
     // 3. LocalStorage cleanup (offline_summaries_ and shift_history_)
     if (opSafe) {
@@ -588,9 +571,6 @@ export const saveShiftSummary = async (summary: Omit<ShiftSummary, 'timestamp' |
         const localHistory: any[] = localData ? JSON.parse(localData) : [];
         const localEntry = { id: docId, ...summaryData, date: loginDate, timestamp: { seconds: Math.floor(Date.now() / 1000) } };
         
-        // Save into device IndexedDB
-        saveLocalItem(STORES.SHIFT_HISTORY, localEntry);
-
         // Replace existing entry with same clockInTime or docId
         const filteredHistory = localHistory.filter((s: any) => 
             s.id !== docId && s.docId !== docId && s.clockInTime !== summaryData.clockInTime
@@ -914,26 +894,16 @@ export const fetchShiftSummaries = async (userName: string, force: boolean = fal
   const safeName = userName.toUpperCase().trim();
   const cacheKey = `shiftsummaries_${safeName}`;
 
-  // 1. Check local IndexedDB first for instant loading
-  const localDbItems = await getAllLocalItems<any>(STORES.SHIFT_HISTORY);
-  const userLocalDbItems = localDbItems.filter(s => (s.userName || '').toUpperCase().trim() === safeName);
-
+  // 1. Check local localStorage cache first for instant loading
   if (!force) {
     const cached = getCachedData<ShiftSummary[]>(cacheKey);
     if (cached !== null && Array.isArray(cached) && cached.length > 0) {
       return cached;
     }
-    if (userLocalDbItems && userLocalDbItems.length > 0) {
-      setCachedData(cacheKey, userLocalDbItems);
-      // Return local IndexedDB cache immediately for 0ms response time
-      if (!canFetchData(cacheKey, false)) {
-        return userLocalDbItems;
-      }
-    }
   }
 
   if (!canFetchData(cacheKey, force)) {
-    return getCachedData<ShiftSummary[]>(cacheKey) || userLocalDbItems || [];
+    return getCachedData<ShiftSummary[]>(cacheKey) || [];
   }
 
   // Run cleanup on fetch
@@ -977,7 +947,7 @@ export const fetchShiftSummaries = async (userName: string, force: boolean = fal
         const localKey = `shift_history_${safeName}`;
         const localData = localStorage.getItem(localKey);
         const localSummaries = localData ? JSON.parse(localData) : [];
-        const combinedLocal = [...localSummaries, ...userLocalDbItems];
+        const combinedLocal = [...localSummaries];
 
         const merged = [...summaries];
         combinedLocal.forEach((local: any) => {
@@ -993,12 +963,6 @@ export const fetchShiftSummaries = async (userName: string, force: boolean = fal
         });
         summaries = merged;
     } catch(e) {}
-    
-    // Bulk save all merged shift summaries into local IndexedDB for future offline/instant access
-    saveLocalItems(STORES.SHIFT_HISTORY, summaries.map(s => ({
-      id: s.id || `${s.userId || 'anon'}_${s.clockInTime || Date.now()}`,
-      ...s
-    })));
     
     // Sort descending by timestamp
     summaries.sort((a, b) => {

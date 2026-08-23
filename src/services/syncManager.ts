@@ -114,30 +114,26 @@ class SyncManager {
             const currentUser = auth.currentUser;
             const targetUser = (userName || currentUser?.displayName || localStorage.getItem('lastUser') || '').toUpperCase().trim();
 
-            // 1. PUSH: Sync local IndexedDB shiftHistory to Firebase
-            const localShifts = await getAllLocalItems<any>(STORES.SHIFT_HISTORY);
-            for (const shift of localShifts) {
-                if (!shift) continue;
-                const docId = shift.docId || shift.id || `${shift.userId || currentUser?.uid || 'anon'}_${shift.clockInTime || Date.now()}`;
-                const shiftUser = (shift.userName || targetUser).toUpperCase().trim();
-                
-                if (targetUser && shiftUser && shiftUser !== targetUser) continue;
+            // 1. PUSH: Sync local IndexedDB rotas to Firebase
+            const localRotas = await getAllLocalItems<any>(STORES.ROTAS);
+            for (const rotaItem of localRotas) {
+                if (!rotaItem || !rotaItem.userName) continue;
+                const rUser = rotaItem.userName.toUpperCase().trim();
+                if (targetUser && rUser !== targetUser) continue;
 
-                const summaryData = {
-                    ...shift,
-                    docId,
-                    userId: shift.userId && shift.userId !== 'anon' ? shift.userId : (currentUser?.uid || 'anon'),
-                    userName: shiftUser || 'OPERATOR',
-                    clockInTime: shift.clockInTime || Date.now(),
-                    timestamp: shift.timestamp || serverTimestamp()
-                };
+                const uid = currentUser?.uid;
+                if (!uid) continue;
 
                 try {
-                    const ref = doc(db, 'shift_summaries', docId);
-                    await setDoc(ref, summaryData, { merge: true });
+                    const userRef = doc(db, 'users', uid);
+                    await setDoc(userRef, {
+                        rotaConfig: rotaItem.rotaConfig || null,
+                        rotaOverrides: rotaItem.rotaOverrides || null,
+                        updatedAt: Date.now()
+                    }, { merge: true });
                     pushed++;
                 } catch (err) {
-                    this.enqueue('shiftSummary', { docId, summaryData });
+                    console.warn(`[SyncManager] Rota push failed for ${rUser}:`, err);
                 }
             }
 
@@ -161,48 +157,6 @@ class SyncManager {
                     pushed++;
                 } catch (err) {
                     console.warn(`[SyncManager] Profile push failed for ${pUser}:`, err);
-                }
-            }
-
-            // 3. PUSH: Sync local IndexedDB rotas to Firebase
-            const localRotas = await getAllLocalItems<any>(STORES.ROTAS);
-            for (const rotaItem of localRotas) {
-                if (!rotaItem || !rotaItem.userName) continue;
-                const rUser = rotaItem.userName.toUpperCase().trim();
-                if (targetUser && rUser !== targetUser) continue;
-
-                const uid = currentUser?.uid;
-                if (!uid) continue;
-
-                try {
-                    const userRef = doc(db, 'users', uid);
-                    await setDoc(userRef, {
-                        rotaConfig: rotaItem.rotaConfig || null,
-                        rotaOverrides: rotaItem.rotaOverrides || null,
-                        updatedAt: Date.now()
-                    }, { merge: true });
-                    pushed++;
-                } catch (err) {
-                    console.warn(`[SyncManager] Rota push failed for ${rUser}:`, err);
-                }
-            }
-
-            // 4. PULL: Fetch remote shift summaries from Firebase Firestore into local IndexedDB
-            if (targetUser) {
-                const q = query(
-                    collection(db, 'shift_summaries'),
-                    where('userName', '==', targetUser),
-                    limit(150)
-                );
-                const snapshot = await getDocs(q);
-                const remoteSummaries: any[] = [];
-                snapshot.forEach(docSnap => {
-                    remoteSummaries.push({ id: docSnap.id, ...docSnap.data() });
-                });
-
-                if (remoteSummaries.length > 0) {
-                    await saveLocalItems(STORES.SHIFT_HISTORY, remoteSummaries);
-                    pulled += remoteSummaries.length;
                 }
             }
         } catch (err) {

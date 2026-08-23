@@ -12,9 +12,6 @@ const DB_VERSION = 2;
 
 export const STORES = {
   ROTAS: 'rotas',
-  SHIFT_HISTORY: 'shiftHistory',
-  SHIFTS: 'shifts',
-  SHIFT_PHOTOS: 'shift_photos',
   USER_PROFILES: 'userProfiles',
   SYSTEM_CONFIG: 'systemConfig'
 } as const;
@@ -40,34 +37,12 @@ export const initLocalDB = (): Promise<IDBDatabase> => {
         db.createObjectStore(STORES.ROTAS, { keyPath: 'key' });
       }
 
-      // 2. Shift History Summaries
-      if (!db.objectStoreNames.contains(STORES.SHIFT_HISTORY)) {
-        const historyStore = db.createObjectStore(STORES.SHIFT_HISTORY, { keyPath: 'id' });
-        historyStore.createIndex('userId', 'userId', { unique: false });
-        historyStore.createIndex('date', 'date', { unique: false });
-      }
-
-      // 3. Shifts (Single Source of Truth v1.8.0)
-      if (!db.objectStoreNames.contains(STORES.SHIFTS)) {
-        const shiftsStore = db.createObjectStore(STORES.SHIFTS, { keyPath: 'id' });
-        shiftsStore.createIndex('date', 'date', { unique: false });
-        shiftsStore.createIndex('userId', 'userId', { unique: false });
-        shiftsStore.createIndex('shiftDate', 'shiftDate', { unique: false });
-      }
-
-      // 4. Decoupled Shift Photos (v1.8.0)
-      if (!db.objectStoreNames.contains(STORES.SHIFT_PHOTOS)) {
-        const photosStore = db.createObjectStore(STORES.SHIFT_PHOTOS, { keyPath: 'photoId' });
-        photosStore.createIndex('shiftDate', 'shiftDate', { unique: false });
-        photosStore.createIndex('userId', 'userId', { unique: false });
-      }
-
-      // 5. User Profiles
+      // 2. User Profiles
       if (!db.objectStoreNames.contains(STORES.USER_PROFILES)) {
         db.createObjectStore(STORES.USER_PROFILES, { keyPath: 'username' });
       }
 
-      // 6. System Config
+      // 3. System Config
       if (!db.objectStoreNames.contains(STORES.SYSTEM_CONFIG)) {
         db.createObjectStore(STORES.SYSTEM_CONFIG, { keyPath: 'key' });
       }
