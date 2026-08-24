@@ -33,7 +33,7 @@ import {
     setWarehouseContext, deleteShiftSummary, getDatabaseStorageStats, stripOldImagesFromDatabase, 
     DBStorageStats, deleteUser, saveBetaFeedback, subscribeToLeaderboard, subscribeToLiveUsers
 } from './services/leaderboardService';
-import { getLocalRota, saveLocalRota, getAllLocalItems, STORES } from './services/indexedDbService';
+import { getLocalRota, saveLocalRota, getAllLocalItems, STORES, migrateLocalStorageToIndexedDB } from './services/indexedDbService';
 import { compressImage } from './lib/imageCompressor';
 import { deviceHaptic, deviceExport, saveImageToDevice } from './lib/deviceApi';
 import { checkUpdate, openDownloadLink, AppVersionInfo, isNewer } from './lib/VersionManager';
@@ -343,6 +343,9 @@ export default function App() {
     useEffect(() => {
         const hydrateFromPreferences = async () => {
             try {
+                // Silently migrate legacy localStorage shift data to high-capacity IndexedDB
+                migrateLocalStorageToIndexedDB().catch(() => {});
+
                 const { value: lastUser } = await Preferences.get({ key: 'lastUser' });
                 const userOp = lastUser || localStorage.getItem('lastUser') || 'default';
                 const prefKey = lastUser ? `pickData_${lastUser}` : 'pickData';

@@ -23,7 +23,7 @@ import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { canFetchData, getCachedData, setCachedData, markDataFetched, markQuotaExceeded, isQuotaExceeded } from '../utils/quotaManager';
-import { STORES, getLocalItem, saveLocalItem, saveLocalItems, getAllLocalItems, deleteLocalItem, saveLocalRota } from './indexedDbService';
+import { STORES, getLocalItem, saveLocalItem, saveLocalItems, getAllLocalItems, deleteLocalItem, saveLocalRota, saveLocalShiftSummaries, getLocalShiftSummaries } from './indexedDbService';
 
 import { UserRole, UserProfile } from '../types';
 import { getDailyAIBots, getDailyAILiveUsers } from '../utils/botGenerator';
@@ -895,11 +895,26 @@ export const fetchShiftSummaries = async (userName: string, force: boolean = fal
   const safeName = userName.toUpperCase().trim();
   const cacheKey = `shiftsummaries_${safeName}`;
 
-  // 1. Check local localStorage cache first for instant loading
+  // 1. Check in-memory/quotaManager cache first for instant loading
   if (!force) {
     const cached = getCachedData<ShiftSummary[]>(cacheKey);
     if (cached !== null && Array.isArray(cached) && cached.length > 0) {
       return cached;
+    }
+  }
+
+  // 2. Check IndexedDB clean 6-week local mirror
+  if (!force) {
+    try {
+      const idbShifts = await getLocalShiftSummaries(safeName);
+      if (idbShifts && idbShifts.length > 0) {
+        setCachedData(cacheKey, idbShifts);
+        if (!canFetchData(cacheKey, false)) {
+          return idbShifts;
+        }
+      }
+    } catch (e) {
+      console.warn('Error reading from IndexedDB in fetchPersonalShiftSummaries:', e);
     }
   }
 
@@ -1059,6 +1074,10 @@ export const fetchShiftSummaries = async (userName: string, force: boolean = fal
 
     const uniqueSummaries = Object.values(dateGroups) as ShiftSummary[];
     setCachedData(cacheKey, uniqueSummaries);
+    // Persist to IndexedDB clean local mirror for 6-week offline access & quota protection
+    saveLocalShiftSummaries(safeName, uniqueSummaries).catch(err => {
+      console.warn('Failed saving shift summaries to IndexedDB:', err);
+    });
     return uniqueSummaries;
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'shift_summaries');
