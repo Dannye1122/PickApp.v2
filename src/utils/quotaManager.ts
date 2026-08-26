@@ -100,12 +100,13 @@ export const resetQuotaStatus = () => {
  * Checks if a data fetch for the given key is allowed based on the read-lock, quota status, and visibility constraints.
  */
 export const canFetchData = (cacheKey: string, force: boolean = false): boolean => {
-    // If quota is already marked as exceeded, strictly block remote calls and rely on cache
+    // If user explicitly requests a force-sync, we MUST bypass all throttles and locks.
+    if (force) return true;
+
+    // If quota is already marked as exceeded, block standard background/throttled calls.
     if (isQuotaExceeded()) {
         return false;
     }
-
-    if (force) return true;
     
     // Water-tight optimization: strictly block background/inactive tabs from triggering database reads.
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {

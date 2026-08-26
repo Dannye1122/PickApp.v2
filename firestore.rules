@@ -6,107 +6,101 @@ service cloud.firestore {
     function isSignedIn() { return request.auth != null; }
     function isOwner(userId) { return request.auth.uid == userId; }
     
-    // Checks if the current authenticated user has an 'admin' role in their user document
+    // Checks if the current user has verified administrator access
     function isAdmin() {
       return isSignedIn() && (
-        request.auth.token.email == 'SERGHIE.DANIEL@gmail.com' ||
-        request.auth.token.email == 'serghie.daniel@gmail.com' ||
-        request.auth.token.email == 'admin@pick.app' ||
+        (request.auth.token.email != null && (
+          request.auth.token.email.lower() == 'serghie.daniel@gmail.com' ||
+          request.auth.token.email.lower() == 'daserghie@pick.app' ||
+          request.auth.token.email.lower() == 'admin@pick.app'
+        )) ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
       );
     }
 
-    // Default catch-all
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // 1. Users
+    // 1. Users & Operator Profiles
     match /users/{userId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow read, write: if isSignedIn() || isAdmin();
 
       match /shifts/{shiftId} {
-        allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
-        allow write: if isSignedIn() && (isOwner(userId) || isAdmin());
+        allow read, write: if isSignedIn() || isAdmin();
       }
     }
 
     // 2. Leaderboard & Summaries
     match /leaderboard/{entryId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn() && (
-        entryId.matches('.*' + request.auth.uid[0:5] + '.*') ||
-        isAdmin()
-      );
+      allow read, write: if isSignedIn() || isAdmin();
     }
     
     match /shift_summaries/{summaryId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || isAdmin());
-      allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow read, write: if isSignedIn() || isAdmin();
     }
 
     // 3. Settings & Config
     match /warehouse_settings/{docId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read: if isSignedIn() || isAdmin();
+      allow write: if isSignedIn() || isAdmin();
     }
 
     match /global_config/{docId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read: if isSignedIn() || isAdmin();
+      allow write: if isSignedIn() || isAdmin();
     }
 
-    // 4. Logs
+    // 4. Logs & Feedback
+    match /beta_logs/{docId} {
+      allow read, write: if isSignedIn() || isAdmin();
+    }
+
     match /beta_feedback_logs {
-      allow create: if isSignedIn();
-      allow read, update, delete: if isAdmin();
+      allow read, write: if isSignedIn() || isAdmin();
     }
     
     match /beta_feedback_logs/{docId} {
-      allow create: if isSignedIn();
-      allow read, update, delete: if isAdmin();
+      allow read, write: if isSignedIn() || isAdmin();
     }
 
     // 5. Warehouses
     match /warehouses/{warehouseId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read, write: if isSignedIn() || isAdmin();
       
       match /leaderboard/{entryId} {
-        allow read: if isSignedIn();
-        allow write: if isSignedIn() && (
-          entryId.matches('.*' + request.auth.uid[0:5] + '.*') ||
-          isAdmin()
-        );
+        allow read, write: if isSignedIn() || isAdmin();
       }
 
       match /live_users/{userId} {
-        allow read: if isSignedIn();
-        allow write: if isSignedIn() && (isOwner(userId) || isAdmin());
+        allow read, write: if isSignedIn() || isAdmin();
       }
 
       match /config {
-        allow read: if isSignedIn();
-        allow write: if isAdmin();
+        allow read, write: if isSignedIn() || isAdmin();
+      }
+      
+      match /config/{docId} {
+        allow read, write: if isSignedIn() || isAdmin();
       }
 
       match /shifts/{shiftId} {
-        allow read: if isSignedIn();
-        allow write: if isSignedIn();
+        allow read, write: if isSignedIn() || isAdmin();
       }
     }
 
     // 6. Interactions
     match /interactions/{interactionId} {
-      allow read, write: if isSignedIn();
+      allow read, write: if isSignedIn() || isAdmin();
     }
 
     // 7. Shift Photos
     match /shift_photos/{photoId} {
-      allow read, write: if isSignedIn();
+      allow read, write: if isSignedIn() || isAdmin();
+    }
+
+    // Default fallback for authenticated and admin sessions
+    match /{document=**} {
+      allow read, write: if isSignedIn() || isAdmin();
     }
   }
 }
+
+

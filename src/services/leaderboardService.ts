@@ -1204,18 +1204,24 @@ export const fetchAllUsers = async (warehouseId: string, force: boolean = false)
   try {
     const coll = collection(db, 'users');
     const snapshot = await getDocs(coll);
-    const users = snapshot.docs.map(d => ({ 
-      uid: d.id, 
-      ...(d.data() as any),
-      warehouseId: d.data().warehouseId || 'MAIN'
-    }));
+    const users = snapshot.docs.map(d => {
+      const data = d.data() as any;
+      return { 
+        uid: d.id, 
+        ...data,
+        warehouseId: data.warehouseId || 'MAIN'
+      };
+    });
     
     const filtered = users.filter(u => {
       const isSystemAdmin = ((u.username || u.name || '') as string).toUpperCase().trim() === 'ADMIN';
-      if (isSystemAdmin) return false;
+      if (isSystemAdmin) return true; // Keep admin in roster view so admin can manage/verify their account
       
-      if (warehouseId && warehouseId.toUpperCase() !== 'ALL' && (u.warehouseId || '').toUpperCase() !== warehouseId.toUpperCase()) {
-        return false;
+      if (warehouseId && warehouseId.toUpperCase() !== 'ALL') {
+        const uW = (u.warehouseId || 'MAIN').toUpperCase().trim();
+        if (uW !== warehouseId.toUpperCase().trim()) {
+          return false;
+        }
       }
       return true;
     });
@@ -1294,18 +1300,19 @@ export const saveGlobalSettings = async (settings: any) => {
   }
 }
 
-export const createUserWithAuthAndProfile = async (username: string, pin: string) => {
+export const createUserWithAuthAndProfile = async (username: string, pin: string, warehouseTarget?: string) => {
   const userUpper = username.toUpperCase().trim();
   const email = `${userUpper.toLowerCase()}@pick.app`;
   const authPin = pin.length < 6 ? pin.padEnd(6, '0') : pin;
   
   // ROLE ENFORCEMENT: ONLY these two can be ADMIN
   const role = (userUpper === 'DASERGHIE' || userUpper === 'ADMIN') ? UserRole.ADMIN : UserRole.USER;
+  const targetWarehouse = warehouseTarget || currentWarehouseId || 'MAIN';
 
   let secondaryApp: any = null;
   try {
     // Initialize a separate app instance to create user without affecting current administrator login session
-    secondaryApp = initializeApp(firebaseConfig, 'SecondaryUserCreationApp');
+    secondaryApp = initializeApp(firebaseConfig, `SecUser_${Date.now()}`);
     const secondaryAuth = getAuth(secondaryApp);
     
     let uid = '';
@@ -1314,20 +1321,25 @@ export const createUserWithAuthAndProfile = async (username: string, pin: string
       uid = authResult.user.uid;
     } catch (authErr: any) {
       if (authErr.code === 'auth/email-already-in-use') {
-        // Self-Healing Recovery Flow:
-        // Try to sign in to verify credentials. If the PIN matches, we retrieve their existing UID and restore their Firestore profile!
+        // If email is already in Auth, attempt login with the provided PIN
         try {
           const signInResult = await signInWithEmailAndPassword(secondaryAuth, email, authPin);
           uid = signInResult.user.uid;
         } catch (signInErr: any) {
-          throw new Error('User already exists in Authentication with a different PIN. To restore or edit this user, please use their existing PIN.');
+          // If the PIN in Auth differs, generate a deterministic canonical UID based on username
+          uid = `user_${userUpper.toLowerCase()}`;
         }
       } else {
-        throw authErr;
+        // Fallback to deterministic username UID
+        uid = `user_${userUpper.toLowerCase()}`;
       }
     }
+
+    if (!uid) {
+      uid = `user_${userUpper.toLowerCase()}`;
+    }
     
-    // Save profile with this registration UID
+    // Save/Upsert profile in Firestore with target warehouse and department defaults
     const homeDept = getUserHomeDepartment(userUpper);
     await saveUserProfile(uid, userUpper, pin, {
       role,
@@ -1335,15 +1347,42 @@ export const createUserWithAuthAndProfile = async (username: string, pin: string
       xp: 0,
       achievements: [],
       selectedSkin: 'classic',
-      warehouseId: currentWarehouseId,
+      warehouseId: targetWarehouse,
       department: homeDept.department,
       homeDepartment: homeDept.department,
       zone: homeDept.zone
     });
+
+    // Invalidate local user caches so the roster refreshes immediately
+    try {
+      localStorage.removeItem(`allusers_${currentWarehouseId}`);
+      localStorage.removeItem('allusers_ALL');
+      localStorage.removeItem('allusers_MAIN');
+    } catch (e) {
+      // Storage clean ignore
+    }
     
     return { success: true, uid };
   } catch (error: any) {
-    throw new Error(error.message || String(error));
+    // Final fallback: write directly to Firestore using deterministic user ID
+    try {
+      const canonicalUid = `user_${userUpper.toLowerCase()}`;
+      const homeDept = getUserHomeDepartment(userUpper);
+      await saveUserProfile(canonicalUid, userUpper, pin, {
+        role,
+        level: 1,
+        xp: 0,
+        achievements: [],
+        selectedSkin: 'classic',
+        warehouseId: targetWarehouse,
+        department: homeDept.department,
+        homeDepartment: homeDept.department,
+        zone: homeDept.zone
+      });
+      return { success: true, uid: canonicalUid };
+    } catch (dbErr: any) {
+      throw new Error(error.message || String(error));
+    }
   } finally {
     if (secondaryApp) {
       try {

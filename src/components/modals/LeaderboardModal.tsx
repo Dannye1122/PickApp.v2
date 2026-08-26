@@ -183,10 +183,10 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                         </div>
                       </div>
 
-                      {(user.customStatus || user.listeningTo) && (
+                      {user.customStatus && (
                         <div className="bg-slate-900/60 px-3 py-1.5 rounded-xl border border-slate-700/30 flex items-center gap-2">
-                          <span className="text-xs animate-bounce shrink-0">🎵</span>
-                          <span className="text-[10px] sm:text-[11px] text-indigo-300 italic truncate font-medium">Vibe: <span className="text-white not-italic font-semibold">{user.customStatus || user.listeningTo}</span></span>
+                          <span className="text-xs shrink-0">💬</span>
+                          <span className="text-[10px] sm:text-[11px] text-indigo-300 italic truncate font-medium">Status: <span className="text-white not-italic font-semibold">{user.customStatus}</span></span>
                         </div>
                       )}
                       
@@ -259,10 +259,10 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                           </div>
                         </div>
                       </div>
-                      {isLive && liveUser && (liveUser.customStatus || liveUser.listeningTo) && (
+                      {isLive && liveUser && liveUser.customStatus && (
                         <div className="bg-slate-900/40 p-2 rounded-xl border border-slate-800/30 flex items-center gap-2 mt-1">
-                          <span className="text-[10px] animate-pulse shrink-0">🎵</span>
-                          <span className="text-[10px] sm:text-[11px] text-indigo-300 italic truncate font-medium">Vibe: <span className="text-slate-200 not-italic font-semibold">{liveUser.customStatus || liveUser.listeningTo}</span></span>
+                          <span className="text-[10px] shrink-0">💬</span>
+                          <span className="text-[10px] sm:text-[11px] text-indigo-300 italic truncate font-medium">Status: <span className="text-slate-200 not-italic font-semibold">{liveUser.customStatus}</span></span>
                         </div>
                       )}
                     </div>

@@ -110,6 +110,7 @@ export interface ShiftData {
     storeLabel?: string;
     warehouseId?: string;
     isCaseCountModified?: boolean;
+    listeningTo?: string;
     biometricEnabled?: never; // REMOVED
     watchConnected?: boolean;
     watchName?: string;
@@ -162,6 +163,7 @@ export interface LiveUser {
     xp?: number;
     cases?: number;
     rate?: number;
+    listeningTo?: string;
     [key: string]: any;
 }
 

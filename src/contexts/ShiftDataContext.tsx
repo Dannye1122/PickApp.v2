@@ -67,9 +67,9 @@ export const defaultShiftData = {
     selectedSkin: null, // null means use Zone default
     storeLabel: '',
     operatorNote: '',
+    customStatus: '',
     assistantImage: '',
     isCaseCountModified: false,
-    customStatus: '',
     listeningTo: '',
     rotaConfig: {
         weeks: 6,

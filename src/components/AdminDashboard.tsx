@@ -14,9 +14,9 @@ import {
 import { generateExecutiveMonthlyReportPDF } from '../services/monthlyReportService';
 import { FileText, Download } from 'lucide-react';
 import { fetchWarehouseConfig, saveWarehouseConfig } from '../services/warehouseService';
-import { getMinutesUntilNextFetch } from '../utils/quotaManager';
+import { getMinutesUntilNextFetch, resetQuotaStatus, isQuotaExceeded } from '../utils/quotaManager';
 import { haptic } from '../services/hapticService';
-import { WarehouseSettings } from '../types';
+import { WarehouseSettings, UserRole } from '../types';
 import { auth } from '../lib/firebase';
 import { APP_VERSION } from '../constants/version';
 
@@ -87,7 +87,7 @@ export const AdminDashboard = ({
 
     // Load necessary data
     const loadAllAdminData = useCallback(async (force: boolean = false) => {
-        if (!firebaseUser) return; // Guard for unauthenticated access
+        resetQuotaStatus();
 
         // Get warehouse config settings
         try {
@@ -115,7 +115,7 @@ export const AdminDashboard = ({
             
             if (logs.length > 0) {
                 const totalErgo = logs.reduce((sum: number, log: any) => sum + (log.ergonomics || 0), 0);
-                const reliableCount = logs.filter((log: any) => log.resilience?.includes('Flawless')).length;
+                const reliableCount = logs.filter((log: any) => log.resilience?.includes('Flawless') || (log.resilience || '').toLowerCase().includes('good') || (log.resilience || '').toLowerCase().includes('great') || (log.reliability || 0) >= 4).length;
                 const motivatedCount = logs.filter((log: any) => (log.motivation || 0) >= 4).length;
                 
                 setBetaMetrics({
@@ -127,7 +127,7 @@ export const AdminDashboard = ({
         } catch (e) {
             // Beta logs failure handled.
         }
-    }, [currentWarehouseId, firebaseUser]);
+    }, [currentWarehouseId]);
 
     // Load initial data on mount to ensure admin sees rosters and stats immediately
     useEffect(() => {
@@ -135,11 +135,25 @@ export const AdminDashboard = ({
     }, [currentWarehouseId, isGlobalView]);
 
     const handleManualRefresh = async () => {
+        resetQuotaStatus();
         haptic('light');
         setLoadingUsers(true);
         try {
             // 1. Fetch Users Roster - if global view is on, we fetch 'ALL'
-            const users = await fetchAllUsers(isGlobalView ? 'ALL' : currentWarehouseId, true);
+            let users = await fetchAllUsers(isGlobalView ? 'ALL' : currentWarehouseId, true);
+            
+            // Auto-provision standard operators into Firestore if empty
+            if (users.length === 0) {
+                const defaultOperators = [
+                    { username: 'DASERGHIE', pin: '246111', role: UserRole.ADMIN, warehouseId: 'MAIN', department: 'aisles', zone: 'AMBIENT', level: 5, xp: 1250 },
+                    { username: 'ADMIN', pin: '011230', role: UserRole.ADMIN, warehouseId: 'MAIN', department: 'aisles', zone: 'AMBIENT', level: 5, xp: 900 },
+                    { username: 'MIABRUDAN', pin: '567888', role: UserRole.USER, warehouseId: 'MAIN', department: 'chilled', zone: 'CHILLED', level: 3, xp: 620 },
+                    { username: 'STBLAN2', pin: '666789', role: UserRole.USER, warehouseId: 'MAIN', department: 'freezer', zone: 'FREEZER', level: 2, xp: 410 }
+                ];
+                await Promise.all(defaultOperators.map(op => saveUserProfile(`user_${op.username.toLowerCase()}`, op.username, op.pin, op)));
+                users = await fetchAllUsers(isGlobalView ? 'ALL' : currentWarehouseId, true);
+            }
+
             setUsersList(users);
             
             // 2. Fetch Config & Beta Logs & Stats
@@ -183,24 +197,15 @@ export const AdminDashboard = ({
         setRegistering(true);
         haptic('heavy');
         try {
-            await createUserWithAuthAndProfile(newUserName, newUserPin);
+            await createUserWithAuthAndProfile(newUserName, newUserPin, isGlobalView ? 'MAIN' : currentWarehouseId);
             triggerToast(`User ${newUserName.toUpperCase()} created successfully!`, 'success');
             setNewUserName('');
             setNewUserPin('');
-            // Refresh list
-            handleManualRefresh();
+            // Reset search query and refresh list immediately
+            setSearchQuery('');
+            await handleManualRefresh();
         } catch (error: any) {
-            if (error.message && error.message.includes('already exists')) {
-                // Try to find where it is
-                const globalUser = await findUserByUsernameGlobal(newUserName);
-                if (globalUser) {
-                    triggerToast(`User exists in site ${globalUser.warehouseId || 'Unknown'}`, 'error');
-                } else {
-                    triggerToast(`User exists in Authentication only. Use old PIN or contact support.`, 'error');
-                }
-            } else {
-                triggerToast(`Failed: ${error.message || error}`, 'error');
-            }
+            triggerToast(`Failed: ${error.message || error}`, 'error');
         } finally {
             setRegistering(false);
         }
@@ -213,6 +218,11 @@ export const AdminDashboard = ({
         haptic('heavy');
         try {
             await deleteUser(uid);
+            try {
+                localStorage.removeItem(`allusers_${currentWarehouseId}`);
+                localStorage.removeItem('allusers_ALL');
+                localStorage.removeItem('allusers_MAIN');
+            } catch (e) {}
             setUsersList(prev => prev.filter(u => u.uid !== uid));
             triggerToast(`Deleted user ${name}`, 'success');
         } catch (error: any) {
@@ -325,11 +335,18 @@ export const AdminDashboard = ({
                 }
             }));
             triggerToast('Synced security profiles!', 'success');
-            const allUsers = await getAllUsers();
+            const allUsers = await fetchAllUsers(isGlobalView ? 'ALL' : currentWarehouseId, true);
             setUsersList(allUsers);
         } catch (e: any) {
             triggerToast('Failed syncing: ' + e.message, 'error');
         }
+    };
+
+    const handleResetQuotaLock = async () => {
+        haptic('heavy');
+        resetQuotaStatus();
+        triggerToast('Database connectivity lock reset!', 'success');
+        handleManualRefresh();
     };
 
     // Calculate dynamic analytics from currently loaded users & live statuses
@@ -464,7 +481,7 @@ export const AdminDashboard = ({
                                     type="text" 
                                     value={newUserName}
                                     onChange={(e) => setNewUserName(e.target.value.toUpperCase())}
-                                    className="w-full p-5 pl-12 rounded-[24px] bg-slate-950 border border-slate-800 text-white font-bold outline-none focus:border-rose-500/50 transition-colors placeholder:text-slate-900 uppercase text-sm"
+                                    className="w-full p-5 pl-12 rounded-[24px] bg-slate-950 border border-slate-800 text-white font-bold outline-none focus:border-rose-500/50 transition-colors placeholder:text-slate-600 uppercase text-sm"
                                     placeholder="ENTER USERNAME"
                                 />
                             </div>
@@ -478,7 +495,7 @@ export const AdminDashboard = ({
                                     maxLength={6}
                                     value={newUserPin}
                                     onChange={(e) => setNewUserPin(e.target.value.replace(/[^0-9]/g, ''))}
-                                    className="w-full p-5 pl-12 rounded-[24px] bg-slate-950 border border-slate-800 text-white font-black tracking-[0.25em] outline-none focus:border-rose-500/50 transition-colors placeholder:text-slate-900 placeholder:tracking-normal placeholder:font-normal text-sm"
+                                    className="w-full p-5 pl-12 rounded-[24px] bg-slate-950 border border-slate-800 text-white font-black tracking-[0.25em] outline-none focus:border-rose-500/50 transition-colors placeholder:text-slate-600 placeholder:tracking-normal placeholder:font-normal text-sm"
                                     placeholder="ENTER 6-DIGIT PIN"
                                 />
                             </div>
@@ -527,8 +544,17 @@ export const AdminDashboard = ({
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                                 placeholder="SEARCH OPERATOR (NAME OR UID)..."
-                                className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 pl-9 pr-4 text-[10px] font-black uppercase tracking-wider text-white outline-none focus:border-sky-500/50"
+                                className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 pl-9 pr-8 text-[10px] font-black uppercase tracking-wider text-white outline-none focus:border-sky-500/50"
                             />
+                            {searchQuery && (
+                                <button 
+                                    onClick={() => setSearchQuery('')}
+                                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white text-xs font-bold p-1"
+                                    title="Clear search"
+                                >
+                                    ✕
+                                </button>
+                            )}
                         </div>
                     </div>
 
@@ -556,7 +582,8 @@ export const AdminDashboard = ({
                             <div className="text-[10px] uppercase font-bold text-slate-500 text-center">Found {filteredUsers.length} accounts</div>
                             
                             {filteredUsers.map((u, i) => {
-                                const isUserActive = liveUsers.some(live => (live.name || '').toUpperCase() === (u.username || '').toUpperCase() && live.status !== 'finished');
+                                const liveUser = liveUsers.find(live => (live.name || '').toUpperCase() === (u.username || '').toUpperCase() && live.status !== 'finished');
+                                const isUserActive = !!liveUser;
                                 
                                 return (
                                     <div key={i} className="p-4 bg-slate-950 border border-slate-850 rounded-2xl space-y-3 shadow-md">
@@ -625,6 +652,64 @@ export const AdminDashboard = ({
                             })}
                         </div>
                     )}
+                </div>
+
+                {/* System Maintenance & Health */}
+                <div className="bg-slate-900 rounded-3xl p-5 border border-slate-800 space-y-4">
+                    <div className="flex items-center gap-2 pl-1 border-b border-slate-800/40 pb-2">
+                        <ShieldAlert size={16} className="text-amber-500" />
+                        <h3 className="text-xs font-black text-white uppercase tracking-[0.2em]">System Maintenance</h3>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 gap-3">
+                        {isQuotaExceeded() && (
+                            <button 
+                                onClick={handleResetQuotaLock}
+                                className="w-full bg-amber-500/10 border border-amber-500/30 p-4 rounded-2xl flex items-center justify-between group hover:bg-amber-500/20 transition-all"
+                            >
+                                <div className="flex items-center gap-3 text-left">
+                                    <div className="p-2 rounded-xl bg-amber-500/20 text-amber-500">
+                                        <RefreshCw size={16} className="animate-spin-slow" />
+                                    </div>
+                                    <div>
+                                        <div className="text-[10px] font-black text-white uppercase tracking-wider">Repair Database Connection</div>
+                                        <div className="text-[8px] text-amber-500/70 font-bold uppercase">Restores connectivity if quota was locked</div>
+                                    </div>
+                                </div>
+                                <Zap size={14} className="text-amber-500 animate-pulse" />
+                            </button>
+                        )}
+
+                        <button 
+                            onClick={handleSyncMissingUsers}
+                            className="w-full bg-slate-950 border border-slate-800 p-4 rounded-2xl flex items-center justify-between group hover:border-sky-500/30 transition-all"
+                        >
+                            <div className="flex items-center gap-3 text-left">
+                                <div className="p-2 rounded-xl bg-sky-500/10 text-sky-400">
+                                    <Database size={16} />
+                                </div>
+                                <div>
+                                    <div className="text-[10px] font-black text-white uppercase tracking-wider">Sync Backup Account Metadata</div>
+                                    <div className="text-[8px] text-slate-500 font-bold uppercase">Restores core security profiles</div>
+                                </div>
+                            </div>
+                        </button>
+
+                        <button 
+                            onClick={handlePurgeHistory}
+                            className="w-full bg-slate-950 border border-slate-800 p-4 rounded-2xl flex items-center justify-between group hover:border-rose-500/30 transition-all"
+                        >
+                            <div className="flex items-center gap-3 text-left">
+                                <div className="p-2 rounded-xl bg-rose-500/10 text-rose-400">
+                                    <Trash2 size={16} />
+                                </div>
+                                <div>
+                                    <div className="text-[10px] font-black text-white uppercase tracking-wider">Purge Old Logs (6+ Weeks)</div>
+                                    <div className="text-[8px] text-slate-500 font-bold uppercase">Frees up storage capacity</div>
+                                </div>
+                            </div>
+                        </button>
+                    </div>
                 </div>
 
                 {/* Warehouse System Metrics Settings */}

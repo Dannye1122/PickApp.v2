@@ -109,8 +109,6 @@ import { useAppUI } from './contexts/AppUIContext';
 import { useAuth } from './contexts/AuthContext';
 import { useShiftData, safeLocalStorage, DASERGHIE_ROTA, defaultShiftData, processLoadedData } from './contexts/ShiftDataContext';
 
-
-
 export default function App() {
     const { 
         showSettings, setShowSettings, 
@@ -1165,8 +1163,7 @@ export default function App() {
                         status: currentStatus,
                         targetRate: shiftData.customTargetRate || currentDept?.target || 200,
                         currentOrder: shiftData.storeLabel || "",
-                        customStatus: shiftData.customStatus || "",
-                        listeningTo: shiftData.listeningTo || ""
+                        customStatus: shiftData.customStatus || ""
                     }
                 );
             };
@@ -1182,7 +1179,7 @@ export default function App() {
                 status: 'finished'
             });
         }
-    }, [isPicking, isOnBreak, isShiftFinalized, shiftData.firstStartTime, shiftData.operator, shiftData.department, shiftData.customStatus, shiftData.listeningTo]);
+    }, [isPicking, isOnBreak, isShiftFinalized, shiftData.firstStartTime, shiftData.operator, shiftData.department, shiftData.customStatus]);
     useEffect(() => {
         const today = getLocalDateString(new Date());
         
@@ -3795,7 +3792,7 @@ export default function App() {
                             theme={theme}
                             currentWarehouseId={currentWarehouseId}
                             liveUsers={liveUsers}
-                            firebaseUser={firebaseUser}
+                            firebaseUser={firebaseUser || auth.currentUser}
                             onBackToDashboard={() => setActiveScreen(0)}
                         />
                     </div>
