@@ -28,6 +28,7 @@ import { STORES, getLocalItem, saveLocalItem, saveLocalItems, getAllLocalItems, 
 import { UserRole, UserProfile } from '../types';
 import { getDailyAIBots, getDailyAILiveUsers } from '../utils/botGenerator';
 import { getUserHomeDepartment } from '../constants/data';
+import { evaluateRosterInactivity } from './inactivityAutoDeactivate';
 
 export enum OperationType {
   CREATE = 'create',
@@ -1091,16 +1092,21 @@ export const saveUserProfile = async (uid: string, username: string, pin: string
   try {
     const userRef = doc(db, 'users', uid);
     
-    // Determine role: STRICT ENFORCEMENT
+    // Determine role: STRICT ENFORCEMENT with optional admin override
     const userUpper = username.toUpperCase().trim();
-    const role = (userUpper === 'DASERGHIE' || userUpper === 'ADMIN') ? UserRole.ADMIN : UserRole.USER;
+    const role = data?.role || ((userUpper === 'DASERGHIE' || userUpper === 'ADMIN') ? UserRole.ADMIN : UserRole.USER);
 
     const updateData: any = {
       uid,
       username: userUpper,
       role,
+      isActive: data?.isActive !== undefined ? data.isActive : true,
       ...data
     };
+    
+    if (data?.isLogin || !updateData.lastLoginTimestamp) {
+      updateData.lastLoginTimestamp = data?.lastLoginTimestamp || Date.now();
+    }
     
     if (pin) {
       updateData.pin = pin;
@@ -1234,11 +1240,13 @@ export const fetchAllUsers = async (warehouseId: string, force: boolean = false)
       return true;
     });
     
-    setCachedData(cacheKey, filtered);
+    const processedUsers = await evaluateRosterInactivity(filtered);
+    
+    setCachedData(cacheKey, processedUsers);
     try {
-      localStorage.setItem(`offline_roster_${warehouseId}`, JSON.stringify(filtered));
+      localStorage.setItem(`offline_roster_${warehouseId}`, JSON.stringify(processedUsers));
     } catch (e) {}
-    return filtered;
+    return processedUsers;
   } catch (error) {
     console.warn('Firestore fetch users error, falling back to local storage/cache:', error);
     try {

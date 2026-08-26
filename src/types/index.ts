@@ -39,6 +39,10 @@ export interface UserProfile {
     homeDepartment?: string;
     zone?: string;
     hasSubmittedBetaFeedback?: boolean;
+    isActive?: boolean;
+    lastLoginTimestamp?: number;
+    lastWarningTimestamp?: number;
+    deactivationReason?: string;
     rotaConfig?: any;
     rotaOverrides?: Record<string, string>;
 }

@@ -1972,6 +1972,11 @@ export default function App() {
             const profile = await getUserProfile(user.uid);
             if (profile) {
                 const p = profile as UserProfile;
+                if (p.isActive === false) {
+                    setLoginError("ACCOUNT DEACTIVATED: Contact Administrator");
+                    haptic('heavy');
+                    return;
+                }
                 const userUpper = (p.username || operatorName).toUpperCase();
                 if (userUpper === 'DASERGHIE' || userUpper === 'ADMIN') {
                     p.role = UserRole.ADMIN;
@@ -2031,6 +2036,11 @@ export default function App() {
                 
                 if (!querySnap.empty) {
                     const firestoreUser = querySnap.docs[0].data() as UserProfile;
+                    if (firestoreUser.isActive === false) {
+                        setLoginError("ACCOUNT DEACTIVATED: Contact Administrator");
+                        haptic('heavy');
+                        return;
+                    }
                     const userUpperCheck = (firestoreUser.username || userUpper).toUpperCase();
                     if (userUpperCheck === 'DASERGHIE' || userUpperCheck === 'ADMIN') {
                         firestoreUser.role = UserRole.ADMIN;
@@ -3438,7 +3448,7 @@ export default function App() {
                     </div>
                 </div>
             )}
-            <div className="relative z-[70] shrink-0 pt-safe-top px-4 pb-3 flex justify-center gap-3 bg-slate-950/40 backdrop-blur-[4px] border-b border-slate-900">
+            <div className="relative z-20 shrink-0 pt-safe-top px-4 pb-3 flex justify-center gap-3 bg-slate-950/40 backdrop-blur-[4px] border-b border-slate-900">
                 <button 
                     onClick={() => { haptic('light'); setActiveScreen(0); }} 
                     className={`flex-1 max-w-[140px] py-3 px-4 rounded-2xl text-[11px] font-black uppercase tracking-widest min-h-[48px] flex items-center justify-center transition-all ${
@@ -3473,7 +3483,7 @@ export default function App() {
                 )}
             </div>
 
-            <div className={`relative z-[60] ${theme.panel.includes('black') ? 'bg-black' : 'bg-slate-900'} pt-3 pb-3 px-4 shadow-lg border-b border-slate-800/80 flex flex-col shrink-0`}>
+            <div className={`relative z-10 ${theme.panel.includes('black') ? 'bg-black' : 'bg-slate-900'} pt-3 pb-3 px-4 shadow-lg border-b border-slate-800/80 flex flex-col shrink-0`}>
                 {/* Row 1: Brand & Control Actions */}
                 <div className="flex justify-between items-center w-full">
                     <div className="flex items-center gap-2.5 min-w-0">

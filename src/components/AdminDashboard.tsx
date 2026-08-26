@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
     Users, User, UserPlus, Trash2, ShieldAlert, Database, Zap, 
     RefreshCw, Settings, Save, CheckCircle, Activity, Info, MapPin, Layers, Fingerprint,
-    TrendingUp, ShieldCheck
+    TrendingUp, ShieldCheck, Pencil, UserCheck, UserX, X
 } from 'lucide-react';
 import { 
     getAllUsers, createUserWithAuthAndProfile, deleteUser, 
@@ -66,6 +67,15 @@ export const AdminDashboard = ({
     const [newUserName, setNewUserName] = useState('');
     const [newUserPin, setNewUserPin] = useState('');
     const [registering, setRegistering] = useState(false);
+    
+    // User Edit modal states
+    const [editingUser, setEditingUser] = useState<any | null>(null);
+    const [editPin, setEditPin] = useState('');
+    const [editRole, setEditRole] = useState<UserRole>(UserRole.USER);
+    const [editWarehouse, setEditWarehouse] = useState('');
+    const [editDepartment, setEditDepartment] = useState('');
+    const [editIsActive, setEditIsActive] = useState(true);
+    const [savingEdit, setSavingEdit] = useState(false);
     
     // Warehouse settings state
     const [warehouseConfig, setWarehouseConfig] = useState<WarehouseSettings | null>(null);
@@ -237,6 +247,82 @@ export const AdminDashboard = ({
             triggerToast(`Deleted user ${name}`, 'success');
         } catch (error: any) {
             triggerToast(`Failed to delete: ${error.message}`, 'error');
+        }
+    };
+
+    const handleToggleUserActive = async (user: any) => {
+        haptic('medium');
+        const currentActive = user.isActive !== false;
+        const newActive = !currentActive;
+        const uName = user.username || user.name || user.uid;
+        
+        try {
+            const success = await saveUserProfile(user.uid, uName, user.pin, {
+                isActive: newActive
+            });
+            if (success) {
+                setUsersList(prev => prev.map(u => u.uid === user.uid ? { ...u, isActive: newActive } : u));
+                triggerToast(`${uName} is now ${newActive ? 'ACTIVE' : 'DEACTIVATED'}`, newActive ? 'success' : 'error');
+            } else {
+                triggerToast('Failed to update user status', 'error');
+            }
+        } catch (error: any) {
+            triggerToast(`Error updating status: ${error.message}`, 'error');
+        }
+    };
+
+    const handleOpenEditModal = (user: any) => {
+        haptic('light');
+        setEditingUser(user);
+        setEditPin(user.pin || '');
+        setEditRole(user.role === UserRole.ADMIN ? UserRole.ADMIN : UserRole.USER);
+        setEditWarehouse(user.warehouseId || 'MAIN');
+        setEditDepartment(user.department || 'aisles');
+        setEditIsActive(user.isActive !== false);
+    };
+
+    const handleSaveUserEdit = async () => {
+        if (!editingUser) return;
+        if (editPin && editPin.length !== 6) {
+            haptic('medium');
+            triggerToast('PIN must be exactly 6 digits', 'error');
+            return;
+        }
+
+        setSavingEdit(true);
+        haptic('heavy');
+        const matched = ALL_DEPARTMENTS_FLAT.find(d => d.id === editDepartment);
+        const zone = matched ? matched.zone : 'AMBIENT';
+        const uName = editingUser.username || editingUser.name || editingUser.uid;
+
+        try {
+            const success = await saveUserProfile(editingUser.uid, uName, editPin, {
+                role: editRole,
+                warehouseId: editWarehouse.toUpperCase().trim(),
+                department: editDepartment,
+                zone: zone,
+                isActive: editIsActive
+            });
+
+            if (success) {
+                triggerToast(`Updated profile for ${uName.toUpperCase()}`, 'success');
+                setUsersList(prev => prev.map(u => u.uid === editingUser.uid ? {
+                    ...u,
+                    pin: editPin,
+                    role: editRole,
+                    warehouseId: editWarehouse.toUpperCase().trim(),
+                    department: editDepartment,
+                    zone: zone,
+                    isActive: editIsActive
+                } : u));
+                setEditingUser(null);
+            } else {
+                triggerToast('Failed to save profile updates', 'error');
+            }
+        } catch (error: any) {
+            triggerToast(`Error saving profile: ${error.message}`, 'error');
+        } finally {
+            setSavingEdit(false);
         }
     };
 
@@ -597,29 +683,78 @@ export const AdminDashboard = ({
                                 
                                 return (
                                     <div key={i} className="p-4 bg-slate-950 border border-slate-850 rounded-2xl space-y-3 shadow-md">
-                                        <div className="flex justify-between items-start gap-2 flex-wrap">
+                                        <div className="flex justify-between items-center gap-2 flex-wrap">
                                             <div className="flex flex-col">
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-sm font-black text-white">{u.username || u.name || u.uid || 'Unknown'}</span>
                                                     {isUserActive && (
-                                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" title="Active on Globe" />
+                                                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" title="Active on Globe / Floor" />
                                                     )}
-                                                </div>
-                                                <div className="flex items-center gap-1.5 mt-0.5">
-                                                    <span className="text-[9px] text-slate-500 uppercase">PIN:</span>
-                                                    <span className="text-[10px] font-mono font-bold text-slate-400">
-                                                        {u.pin || '****'}
+                                                    <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-wider ${
+                                                        u.role === UserRole.ADMIN ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' : 'bg-slate-800 text-slate-400'
+                                                    }`}>
+                                                        {u.role === UserRole.ADMIN ? 'ADMIN' : 'OPERATOR'}
                                                     </span>
+                                                </div>
+                                                <div className="flex items-center gap-3 mt-1 flex-wrap">
+                                                    <div className="flex items-center gap-1">
+                                                        <span className="text-[9px] text-slate-500 uppercase font-bold">PIN:</span>
+                                                        <span className="text-[10px] font-mono font-bold text-slate-300">
+                                                            {u.pin || '****'}
+                                                        </span>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => handleToggleUserActive(u)}
+                                                        className={`flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black tracking-wider border transition-all ${
+                                                            u.isActive !== false
+                                                                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
+                                                                : 'bg-rose-500/10 text-rose-400 border-rose-500/30 hover:bg-rose-500/20'
+                                                        }`}
+                                                        title="Click to toggle account status (Active / Disabled)"
+                                                    >
+                                                        {u.isActive !== false ? <UserCheck size={10} /> : <UserX size={10} />}
+                                                        <span>{u.isActive !== false ? 'ACTIVE' : 'DISABLED'}</span>
+                                                    </button>
+                                                    {(() => {
+                                                        if (u.role === UserRole.ADMIN) return null;
+                                                        const lastL = u.lastLoginTimestamp || Date.now();
+                                                        const daysInact = Math.floor((Date.now() - lastL) / (24 * 3600 * 1000));
+                                                        if (u.isActive === false && u.deactivationReason) {
+                                                            return (
+                                                                <span className="text-[8px] font-bold text-rose-400/90 bg-rose-500/10 border border-rose-500/20 px-1.5 py-0.5 rounded-md" title={u.deactivationReason}>
+                                                                    5d Inactive (Auto-Disabled)
+                                                                </span>
+                                                            );
+                                                        }
+                                                        if (daysInact >= 4 && u.isActive !== false) {
+                                                            return (
+                                                                <span className="text-[8px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/30 px-1.5 py-0.5 rounded-md flex items-center gap-1" title="Warning sent 1 day before auto-deactivation">
+                                                                    <span>⚠️</span> {daysInact}d Inactive (Warning Sent)
+                                                                </span>
+                                                            );
+                                                        }
+                                                        return null;
+                                                    })()}
                                                 </div>
                                             </div>
                                             
-                                            <button 
-                                                onClick={() => handleDeleteUser(u.uid, u.username || u.uid)}
-                                                className="p-1 px-2 text-rose-500 bg-rose-500/5 hover:bg-rose-500/10 rounded-xl transition-all"
-                                                title="Delete operator"
-                                            >
-                                                <Trash2 size={14} />
-                                            </button>
+                                            <div className="flex items-center gap-1.5">
+                                                <button 
+                                                    onClick={() => handleOpenEditModal(u)}
+                                                    className="p-1.5 px-2.5 text-sky-400 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/20 rounded-xl transition-all flex items-center gap-1 text-[10px] font-bold"
+                                                    title="Edit operator credentials & settings"
+                                                >
+                                                    <Pencil size={12} />
+                                                    <span>EDIT</span>
+                                                </button>
+                                                <button 
+                                                    onClick={() => handleDeleteUser(u.uid, u.username || u.uid)}
+                                                    className="p-1.5 px-2 text-rose-500 bg-rose-500/5 hover:bg-rose-500/10 border border-rose-500/10 rounded-xl transition-all"
+                                                    title="Delete operator"
+                                                >
+                                                    <Trash2 size={12} />
+                                                </button>
+                                            </div>
                                         </div>
 
                                         {/* Dynamic Attributes Editor (Department selection & warehouse) */}
@@ -1054,6 +1189,143 @@ export const AdminDashboard = ({
                     </div>
                 )}
             </div>
+
+            {/* Edit Operator Modal */}
+            {typeof document !== 'undefined' && createPortal(
+                <AnimatePresence>
+                    {editingUser && (
+                        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 overflow-y-auto bg-slate-950/90 backdrop-blur-md">
+                            <motion.div 
+                                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                                animate={{ opacity: 1, scale: 1, y: 0 }}
+                                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                                className="bg-slate-900 border border-slate-800 rounded-3xl p-6 w-full max-w-md my-auto max-h-[85vh] overflow-y-auto space-y-5 shadow-2xl relative"
+                            >
+                                <div className="flex justify-between items-center border-b border-slate-800/80 pb-3">
+                                    <div className="flex items-center gap-2">
+                                        <Pencil size={18} className="text-sky-400" />
+                                        <div>
+                                            <h3 className="text-sm font-black text-white uppercase tracking-wider">Edit Operator Profile</h3>
+                                            <p className="text-[10px] text-slate-400 font-mono font-bold">{editingUser.username || editingUser.name || editingUser.uid}</p>
+                                        </div>
+                                    </div>
+                                    <button 
+                                        onClick={() => setEditingUser(null)}
+                                        className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-all"
+                                    >
+                                        <X size={16} />
+                                    </button>
+                                </div>
+
+                                <div className="space-y-4">
+                                    {/* PIN Edit */}
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1.5">
+                                            6-Digit Security PIN
+                                        </label>
+                                        <div className="relative">
+                                            <Fingerprint className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+                                            <input 
+                                                type="text" 
+                                                maxLength={6}
+                                                value={editPin}
+                                                onChange={(e) => setEditPin(e.target.value.replace(/[^0-9]/g, ''))}
+                                                className="w-full bg-slate-950 border border-slate-800 rounded-2xl py-3 pl-11 pr-4 text-white font-mono font-bold tracking-[0.2em] outline-none focus:border-sky-500 text-sm"
+                                                placeholder="6-DIGIT PIN"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Role & Status */}
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1.5">
+                                                Role / Permissions
+                                            </label>
+                                            <select 
+                                                value={editRole}
+                                                onChange={(e) => setEditRole(e.target.value as UserRole)}
+                                                className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs font-bold text-white outline-none focus:border-sky-500"
+                                            >
+                                                <option value={UserRole.USER}>Operator (User)</option>
+                                                <option value={UserRole.ADMIN}>Administrator (Admin)</option>
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1.5">
+                                                Account Status
+                                            </label>
+                                            <button
+                                                type="button"
+                                                onClick={() => setEditIsActive(!editIsActive)}
+                                                className={`w-full py-2.5 px-3 rounded-2xl text-xs font-black uppercase tracking-wider border flex items-center justify-center gap-2 transition-all ${
+                                                    editIsActive 
+                                                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                                        : 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                                                }`}
+                                            >
+                                                {editIsActive ? <UserCheck size={14} /> : <UserX size={14} />}
+                                                {editIsActive ? 'ACTIVE' : 'DISABLED'}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Department */}
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1.5">
+                                            Assigned Department
+                                        </label>
+                                        <select 
+                                            value={editDepartment}
+                                            onChange={(e) => setEditDepartment(e.target.value)}
+                                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs font-bold text-white outline-none focus:border-sky-500"
+                                        >
+                                            {ALL_DEPARTMENTS_FLAT.map(dept => (
+                                                <option key={dept.id} value={dept.id}>
+                                                    {dept.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    {/* Warehouse */}
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1.5">
+                                            Assigned Warehouse Facility
+                                        </label>
+                                        <input 
+                                            type="text" 
+                                            value={editWarehouse}
+                                            onChange={(e) => setEditWarehouse(e.target.value.toUpperCase())}
+                                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs font-bold text-white outline-none focus:border-sky-500 uppercase font-mono"
+                                            placeholder="e.g. MAIN"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-3 pt-2 border-t border-slate-800/80">
+                                    <button
+                                        onClick={() => setEditingUser(null)}
+                                        className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold text-xs uppercase tracking-wider transition-all"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        disabled={savingEdit}
+                                        onClick={handleSaveUserEdit}
+                                        className="flex-1 py-3 bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-lg shadow-sky-500/10"
+                                    >
+                                        {savingEdit ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
+                                        Save Changes
+                                    </button>
+                                </div>
+                            </motion.div>
+                        </div>
+                    )}
+                </AnimatePresence>,
+                document.body
+            )}
 
             {/* Standard React Status Toast Notification overlay */}
             <AnimatePresence>
