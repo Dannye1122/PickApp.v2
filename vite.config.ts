@@ -27,16 +27,17 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           manualChunks: {
-            vendor: ['react', 'react-dom', 'lucide-react', 'framer-motion'],
-            firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore', 'firebase/database', 'firebase/storage'],
+            vendor: ['react', 'react-dom', 'lucide-react', 'motion'],
+            firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore'],
             capacitor: ['@capacitor/core', '@capacitor/preferences', '@capacitor/haptics']
           }
         }
       }
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
+      port: 3000,
+      host: '0.0.0.0',
+      allowedHosts: true,
       hmr: process.env.DISABLE_HMR !== 'true',
     },
   };

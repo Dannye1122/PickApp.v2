@@ -81,6 +81,7 @@ export function getDailyAILiveUsers(): any[] {
         totalCases: bot.cases,
         xp: bot.cases * 10,
         status: 'picking',
+        isActive: true,
         activeSeconds: 14400 + (bot.rate * 20),
         customStatus: '⚡ Automated Precision Picking',
         isBot: true

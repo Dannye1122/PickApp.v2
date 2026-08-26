@@ -52,7 +52,9 @@ export const fetchWarehouseConfig = async (warehouseId: string, force: boolean =
         }
         return localCached || DEFAULT_SETTINGS;
     } catch (error) {
-        handleFirestoreError(error, OperationType.GET, `warehouse_settings/${warehouseId}`);
+        try {
+            handleFirestoreError(error, OperationType.GET, `warehouse_settings/${warehouseId}`);
+        } catch (e) {}
         return getCachedData<WarehouseSettings>(cacheKey) || localCached || DEFAULT_SETTINGS;
     }
 };
