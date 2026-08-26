@@ -11,8 +11,9 @@ service cloud.firestore {
       return isSignedIn() && (
         request.auth.token.email == 'SERGHIE.DANIEL@gmail.com' ||
         request.auth.token.email == 'serghie.daniel@gmail.com' ||
+        request.auth.token.email == 'admin@pick.app' ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
       );
     }
 
@@ -23,7 +24,7 @@ service cloud.firestore {
 
     // 1. Users
     match /users/{userId} {
-      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow read: if isSignedIn();
       allow write: if isSignedIn() && (isOwner(userId) || isAdmin());
 
       match /shifts/{shiftId} {
@@ -61,12 +62,12 @@ service cloud.firestore {
     // 4. Logs
     match /beta_feedback_logs {
       allow create: if isSignedIn();
-      allow read, update, delete: if false;
+      allow read, update, delete: if isAdmin();
     }
     
     match /beta_feedback_logs/{docId} {
       allow create: if isSignedIn();
-      allow read, update, delete: if false;
+      allow read, update, delete: if isAdmin();
     }
 
     // 5. Warehouses
@@ -96,6 +97,16 @@ service cloud.firestore {
         allow read: if isSignedIn();
         allow write: if isSignedIn();
       }
+    }
+
+    // 6. Interactions
+    match /interactions/{interactionId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // 7. Shift Photos
+    match /shift_photos/{photoId} {
+      allow read, write: if isSignedIn();
     }
   }
 }
