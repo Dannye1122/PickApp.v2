@@ -9,7 +9,7 @@ import {
     getAllUsers, createUserWithAuthAndProfile, deleteUser, 
     saveUserProfile, getBetaFeedbackLogs,
     purgeDatabaseOlderThan6Weeks, getDatabaseStorageStats, DBStorageStats,
-    fetchAllUsers, fetchAllShiftSummaries
+    fetchAllUsers, fetchAllShiftSummaries, findUserByUsernameGlobal
 } from '../services/leaderboardService';
 import { generateExecutiveMonthlyReportPDF } from '../services/monthlyReportService';
 import { FileText, Download } from 'lucide-react';
@@ -60,6 +60,8 @@ export const AdminDashboard = ({
 }) => {
     const [usersList, setUsersList] = useState<any[]>([]);
     const [loadingUsers, setLoadingUsers] = useState(false);
+    const [isGlobalView, setIsGlobalView] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
     // Form states
     const [newUserName, setNewUserName] = useState('');
     const [newUserPin, setNewUserPin] = useState('');
@@ -130,14 +132,14 @@ export const AdminDashboard = ({
     // Load initial data on mount to ensure admin sees rosters and stats immediately
     useEffect(() => {
         handleManualRefresh();
-    }, [currentWarehouseId]);
+    }, [currentWarehouseId, isGlobalView]);
 
     const handleManualRefresh = async () => {
         haptic('light');
         setLoadingUsers(true);
         try {
-            // 1. Fetch Users Roster
-            const users = await fetchAllUsers(currentWarehouseId, true);
+            // 1. Fetch Users Roster - if global view is on, we fetch 'ALL'
+            const users = await fetchAllUsers(isGlobalView ? 'ALL' : currentWarehouseId, true);
             setUsersList(users);
             
             // 2. Fetch Config & Beta Logs & Stats
@@ -155,6 +157,16 @@ export const AdminDashboard = ({
         setStatusToast({ message, type });
         setTimeout(() => setStatusToast(null), 3000);
     }, []);
+
+    // Filtered users list based on search
+    const filteredUsers = useMemo(() => {
+        if (!searchQuery) return usersList;
+        const q = searchQuery.toLowerCase().trim();
+        return usersList.filter(u => 
+            (u.username || '').toLowerCase().includes(q) || 
+            (u.uid || '').toLowerCase().includes(q)
+        );
+    }, [usersList, searchQuery]);
 
     const handleCreateUser = useCallback(async () => {
         if (newUserName.length < 3) {
@@ -175,18 +187,24 @@ export const AdminDashboard = ({
             triggerToast(`User ${newUserName.toUpperCase()} created successfully!`, 'success');
             setNewUserName('');
             setNewUserPin('');
+            // Refresh list
+            handleManualRefresh();
         } catch (error: any) {
-            if (error.message && error.message.includes('already-in-use')) {
-                triggerToast(`User ${newUserName.toUpperCase()} profile updated (User already exists).`, 'success');
-                setNewUserName('');
-                setNewUserPin('');
+            if (error.message && error.message.includes('already exists')) {
+                // Try to find where it is
+                const globalUser = await findUserByUsernameGlobal(newUserName);
+                if (globalUser) {
+                    triggerToast(`User exists in site ${globalUser.warehouseId || 'Unknown'}`, 'error');
+                } else {
+                    triggerToast(`User exists in Authentication only. Use old PIN or contact support.`, 'error');
+                }
             } else {
                 triggerToast(`Failed: ${error.message || error}`, 'error');
             }
         } finally {
             setRegistering(false);
         }
-    }, [newUserName, newUserPin, triggerToast]);
+    }, [newUserName, newUserPin, triggerToast, handleManualRefresh]);
 
     const handleDeleteUser = async (uid: string, name: string) => {
         if (!window.confirm(`Are you absolutely sure you want to delete user "${name}"?`)) {
@@ -477,21 +495,40 @@ export const AdminDashboard = ({
 
                 {/* Users Database & Department Assignment */}
                 <div className="bg-slate-900 rounded-3xl p-5 border border-slate-800 space-y-4">
-                    <div className="flex items-center justify-between pl-1 border-b border-slate-800/40 pb-2">
-                        <div className="flex items-center gap-2">
-                            <Users size={16} className="text-sky-400" />
-                            <h3 className="text-xs font-black text-white uppercase tracking-[0.2em]">Operator Database</h3>
+                    <div className="flex flex-col gap-3 pl-1 border-b border-slate-800/40 pb-3">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <Users size={16} className="text-sky-400" />
+                                <h3 className="text-xs font-black text-white uppercase tracking-[0.2em]">Operator Database</h3>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button 
+                                    onClick={() => { haptic('light'); setIsGlobalView(!isGlobalView); }}
+                                    className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest border transition-all ${isGlobalView ? 'bg-amber-500/20 border-amber-500/40 text-amber-400' : 'bg-slate-950 border-slate-800 text-slate-500'}`}
+                                >
+                                    {isGlobalView ? 'SHOWING: ALL_SITES' : 'SITE_ONLY'}
+                                </button>
+                                <button 
+                                    onClick={handleManualRefresh}
+                                    className={`p-1.5 px-3 rounded-xl transition-all flex items-center gap-2 ${loadingUsers ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}
+                                    disabled={loadingUsers}
+                                    title="Fetch latest roster from database"
+                                >
+                                    <RefreshCw size={14} className={loadingUsers ? 'animate-spin' : ''} />
+                                    <span className="text-[10px] font-bold uppercase tracking-tight">Sync</span>
+                                </button>
+                            </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <button 
-                                onClick={handleManualRefresh}
-                                className={`p-1.5 px-3 rounded-xl transition-all flex items-center gap-2 ${loadingUsers ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}
-                                disabled={loadingUsers}
-                                title="Fetch latest roster from database"
-                            >
-                                <RefreshCw size={14} className={loadingUsers ? 'animate-spin' : ''} />
-                                <span className="text-[10px] font-bold uppercase tracking-tight">Sync</span>
-                            </button>
+
+                        <div className="relative group">
+                            <Activity className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-700 group-focus-within:text-sky-400 transition-colors" size={12} />
+                            <input 
+                                type="text" 
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder="SEARCH OPERATOR (NAME OR UID)..."
+                                className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 pl-9 pr-4 text-[10px] font-black uppercase tracking-wider text-white outline-none focus:border-sky-500/50"
+                            />
                         </div>
                     </div>
 
@@ -508,11 +545,17 @@ export const AdminDashboard = ({
                         <div className="text-center py-6 text-slate-500 text-xs font-bold uppercase tracking-widest">
                             <RefreshCw size={20} className="animate-spin mx-auto mb-2 text-sky-400" /> LOADING USER ROSTER...
                         </div>
+                    ) : filteredUsers.length === 0 ? (
+                        <div className="py-12 text-center bg-slate-950/50 rounded-2xl border border-dashed border-slate-800">
+                            <User size={24} className="mx-auto text-slate-800 mb-2" />
+                            <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest">No matching operators</p>
+                            {isGlobalView && <p className="text-[8px] text-slate-700 mt-1 uppercase italic">Try clearing search filters</p>}
+                        </div>
                     ) : (
                         <div className="space-y-4 max-h-[420px] overflow-y-auto no-scrollbar pr-1">
-                            <div className="text-[10px] uppercase font-bold text-slate-500 text-center">Found {usersList.length} accounts</div>
+                            <div className="text-[10px] uppercase font-bold text-slate-500 text-center">Found {filteredUsers.length} accounts</div>
                             
-                            {usersList.map((u, i) => {
+                            {filteredUsers.map((u, i) => {
                                 const isUserActive = liveUsers.some(live => (live.name || '').toUpperCase() === (u.username || '').toUpperCase() && live.status !== 'finished');
                                 
                                 return (

@@ -1169,6 +1169,31 @@ export const getAllUsers = async () => {
   }
 };
 
+export const findUserByUsernameGlobal = async (username: string): Promise<any | null> => {
+  const userUpper = username.toUpperCase().trim();
+  try {
+    const coll = collection(db, 'users');
+    const q = query(coll, where('username', '==', userUpper));
+    const snapshot = await getDocs(q);
+    if (!snapshot.empty) {
+      const d = snapshot.docs[0];
+      return { uid: d.id, ...d.data() };
+    }
+    
+    // Backup search for name field
+    const q2 = query(coll, where('name', '==', userUpper));
+    const snapshot2 = await getDocs(q2);
+    if (!snapshot2.empty) {
+      const d = snapshot2.docs[0];
+      return { uid: d.id, ...d.data() };
+    }
+    
+    return null;
+  } catch (error) {
+    return null;
+  }
+};
+
 export const fetchAllUsers = async (warehouseId: string, force: boolean = false): Promise<any[]> => {
   const cacheKey = `allusers_${warehouseId}`;
   
