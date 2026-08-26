@@ -42,7 +42,7 @@ export const LabelPhotoModal: React.FC<LabelPhotoModalProps> = ({
     <AnimatePresence>
       <div 
         id="label-photo-modal-overlay"
-        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+        className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
         onClick={onClose}
       >
         <motion.div

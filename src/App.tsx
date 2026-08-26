@@ -31,9 +31,14 @@ import {
     purgeDatabaseOlderThan6Weeks, createUserWithAuthAndProfile, updateWarehouseSettings, 
     getWarehouseSettings, getGlobalSettings, saveGlobalSettings, subscribeToWarehouseContext, 
     setWarehouseContext, deleteShiftSummary, getDatabaseStorageStats, stripOldImagesFromDatabase, 
-    DBStorageStats, deleteUser, saveBetaFeedback, subscribeToLeaderboard, subscribeToLiveUsers
+    DBStorageStats, deleteUser, saveBetaFeedback, subscribeToLeaderboard, subscribeToLiveUsers,
+    sendSocialInteraction
 } from './services/leaderboardService';
-import { getLocalRota, saveLocalRota, getAllLocalItems, STORES, migrateLocalStorageToIndexedDB } from './services/indexedDbService';
+import { 
+    getLocalRota, saveLocalRota, getAllLocalItems, STORES, migrateLocalStorageToIndexedDB, 
+    saveLocalActiveShift, saveLocalNotification, getLocalNotifications, 
+    markNotificationAsRead, markAllNotificationsAsRead, clearLocalNotifications 
+} from './services/indexedDbService';
 import { compressImage } from './lib/imageCompressor';
 import { deviceHaptic, deviceExport, saveImageToDevice } from './lib/deviceApi';
 import { checkUpdate, openDownloadLink, AppVersionInfo, isNewer } from './lib/VersionManager';
@@ -55,25 +60,24 @@ import { getDepartmentBreakdown } from './utils/statsUtils';
 
 // New Modular Architecture
 import { OnboardingModal } from './components/OnboardingModal';
+import { PickingDashboardMain } from './components/PickingDashboardMain';
 import { AboutPickApp } from './components/AboutPickApp';
 import { AboutDeveloper } from './components/AboutDeveloper';
 import { InviteModal } from './components/InviteModal';
 import { 
-    ClockInModal, 
-    AdminPinModal, 
-    RestoreShiftModal, 
     OrderFinishModal,
-    RotaOverrideModal,
-    HistoricalShiftModal,
     ShiftSummaryModal,
     CaseUnlockModal,
     ConfirmDialogModal,
-    InstallTutorialModal
+    InstallTutorialModal,
+    NotificationHubModal,
+    SettingsModal,
+    HistoryLeaderboardOverlays
 } from './components/modals';
-import { ShiftData, ThemeColors, LeaderboardEntry, UserRole, UserProfile, WarehouseSettings } from './types';
+import { ShiftData, ThemeColors, LeaderboardEntry, UserRole, UserProfile, WarehouseSettings, ShiftNotification, InteractionType } from './types';
 import { THEMES, SKIN_REQUIREMENTS } from './constants/themes';
 import { USERS, DEPT_LANES, DEPARTMENTS, ACHIEVEMENT_DATA, DUO_MESSAGES, getUserHomeDepartment } from './constants/data';
-import { usePerformanceStats } from './hooks/usePerformanceStats';
+import { usePerformanceStats, useDeviceMotion, useWakeLock } from './hooks';
 import { playAlertSound, playVictorySound, playGentleBeep, getAudioContext } from './services/audioService';
 import { haptic as deviceHapticService, setHapticsEnabled, isVibrationSupported } from './services/hapticService';
 import { 
@@ -101,189 +105,69 @@ import { LeaderboardInteractions } from './components/leaderboard/LeaderboardInt
 import { InteractionToast } from './components/leaderboard/InteractionToast';
 import { subscribeToIncomingInteractions } from './services/leaderboardService';
 import { SocialInteraction } from './types';
+import { useAppUI } from './contexts/AppUIContext';
+import { useAuth } from './contexts/AuthContext';
+import { useShiftData, safeLocalStorage, DASERGHIE_ROTA, defaultShiftData, processLoadedData } from './contexts/ShiftDataContext';
 
 
-export const DASERGHIE_ROTA = {
-    weeks: 6,
-    pattern: [
-        [8, 0, 8, 8, 8, 0, 0], // Week 1 (Mon 11.05 - Work Mon, Wed, Thu, Fri: 8h; Off Tue, Sat, Sun)
-        [8, 8, 8, 8, 0, 0, 8], // Week 2 (Mon 18.05 - Work Mon, Tue, Wed, Thu, Sun: 8h; Off Fri, Sat)
-        [8, 8, 0, 0, 8, 8, 8], // Week 3 (Mon 25.05 - Work Mon, Tue, Fri, Sat, Sun: 8h; Off Wed, Thu)
-        [0, 8, 8, 8, 8, 0, 0], // Week 4 (Mon 01.06 - Work Tue, Wed, Thu, Fri: 8h; Off Mon, Sat, Sun. Matches June 1st)
-        [8, 8, 8, 8, 0, 0, 8], // Week 5 (Mon 08.06 - Work Mon, Tue, Wed, Thu, Sun: 8h; Off Fri, Sat. Matches June 12-13)
-        [8, 8, 0, 0, 8, 8, 8]  // Week 6 (Mon 15.06 - Work Mon, Tue, Fri, Sat, Sun: 8h; Off Wed, Thu. Matches June 17-18)
-    ],
-    anchorDate: '2026-05-11',
-};
-
-const defaultShiftData = {
-    totalCases: 0,
-    firstStartTime: null,
-    totalExcludedTime: 0,
-    history: [],
-    steps: 0,
-    haptic: 'on',
-    department: 'aisles',
-    zone: 'AMBIENT',
-    lastStopTimestamp: null,
-    operator: '',
-    streak: 0,
-    firestreak: 0,
-    lastDate: '',
-    customTargetRate: null,
-    isShiftFinalized: false,
-    finalizedStats: null,
-    tempGap: '0s',
-    pickStartTime: null,
-    isPicking: false,
-    breakStartTime: null,
-    isOnBreak: false,
-    breakTimeDuringCurrentPick: 0,
-    hasAlerted: false,
-    hasGapAlerted: false,
-    lastGapAlertTimestamp: null,
-    hasHalfwayAlerted: false,
-    wakeLock: false,
-    consecutiveTargetOrders: 0,
-    appVersion: APP_VERSION,
-    // Personal Records & Consistency
-    personalBests: {}, // { departmentKey: rate }
-    consistencyScore: 0,
-    bestHourlyRate: 0,
-    // Reward system
-    level: 1,
-    xp: 0,
-    achievements: [],
-    voiceEnabled: false,
-    voiceTask: {
-        aisle: '',
-        slot: '',
-        cases: 0,
-        checkDigits: '',
-        status: 'idle', // idle, awaiting_digits, picking
-    },
-    selectedSkin: null, // null means use Zone default
-    storeLabel: '',
-    operatorNote: '',
-    assistantImage: '',
-    isCaseCountModified: false,
-    customStatus: '',
-    listeningTo: '',
-    rotaConfig: {
-        weeks: 6,
-        pattern: [
-            [0, 0, 0, 0, 0, 0, 0], 
-            [0, 0, 0, 0, 0, 0, 0], 
-            [0, 0, 0, 0, 0, 0, 0], 
-            [0, 0, 0, 0, 0, 0, 0], 
-            [0, 0, 0, 0, 0, 0, 0], 
-            [0, 0, 0, 0, 0, 0, 0]  
-        ],
-        anchorDate: null,
-    },
-    rotaOverrides: {},
-};
-
-const processLoadedData = (parsed: any, defaultValues: any) => {
-    if (!parsed) return { ...defaultValues };
-    
-    // Restore drafts if present
-    const draftNote = localStorage.getItem('draft_operatorNote');
-    if (draftNote !== null) parsed.operatorNote = draftNote;
-    const draftL1 = localStorage.getItem('draft_lane1');
-    if (draftL1 !== null) parsed.lane1 = draftL1;
-    const draftL2 = localStorage.getItem('draft_lane2');
-    if (draftL2 !== null) parsed.lane2 = draftL2;
-    const draftL3 = localStorage.getItem('draft_lane3');
-    if (draftL3 !== null) parsed.lane3 = draftL3;
-    const draftL4 = localStorage.getItem('draft_lane4');
-    if (draftL4 !== null) parsed.lane4 = draftL4;
-    
-    // Migrate legacy data if necessary
-    if (!parsed.personalBests) parsed.personalBests = {};
-    
-    // DELETED PERSISTED BIOMETRIC STATE LOGIC
-    
-    // Set default App version
-    if (parsed.appVersion !== APP_VERSION) {
-        parsed.appVersion = APP_VERSION;
-    }
-    
-    // Initialize DASERGHIE with predefined rota if they have an empty or invalid one
-    if (parsed.operator === 'DASERGHIE') {
-        if (!parsed.rotaConfig || !parsed.rotaConfig.anchorDate) {
-            parsed.rotaConfig = { ...DASERGHIE_ROTA };
-        }
-    } else {
-        // For other users, if missing rotaConfig, give them a blank one
-        if (!parsed.rotaConfig) {
-            parsed.rotaConfig = { ...defaultValues.rotaConfig };
-        } else if (parsed.operator && parsed.operator !== 'DASERGHIE' && parsed.rotaConfig.anchorDate === DASERGHIE_ROTA.anchorDate && JSON.stringify(parsed.rotaConfig.pattern) === JSON.stringify(DASERGHIE_ROTA.pattern)) {
-            // If they somehow got DASERGHIE's rota, clear it
-            parsed.rotaConfig = { ...defaultValues.rotaConfig };
-        }
-    }
-    
-    // Resolve user's home department (e.g. MIABRUDAN -> Aisles 300 / 350)
-    const op = parsed.operator || defaultValues.operator || '';
-    const homeDept = getUserHomeDepartment(op);
-
-    // If shift is fresh, finalized, or not actively picking, start with home department
-    const isActivelyPicking = Boolean(parsed.isPicking);
-    if (!isActivelyPicking && (!parsed.history || parsed.history.length === 0 || parsed.isShiftFinalized)) {
-        parsed.department = homeDept.department;
-        parsed.zone = homeDept.zone;
-    } else {
-        if (!parsed.department) {
-            parsed.department = homeDept.department;
-        }
-        if (!parsed.zone) {
-            parsed.zone = homeDept.zone;
-        }
-    }
-
-    // Force voiceEnabled to false on app startup to prevent microphone activation without explicit consent
-    parsed.voiceEnabled = false;
-    
-    // Recovery of steps tracking from backup
-    if (!parsed.isShiftFinalized && parsed.steps !== undefined && parsed.firstStartTime) {
-        localStorage.setItem('shiftStepBackup', parsed.steps.toString());
-    }
-    
-    return { ...defaultValues, ...parsed };
-};
 
 export default function App() {
-    const [isAuthenticated, setIsAuthenticated] = useState(() => {
-        return sessionStorage.getItem('session_authenticated') === 'true';
-    });
-    const [firebaseUser, setFirebaseUser] = useState<any>(null);
-    const [loginError, setLoginError] = useState('');
+    const { 
+        showSettings, setShowSettings, 
+        showSummary, setShowSummary, 
+        showHistory, setShowHistory, 
+        showRota, setShowRota, 
+        showRestoreModal, setShowRestoreModal,
+        showInstallTutorial, setShowInstallTutorial,
+        showLeaderboard, setShowLeaderboard,
+        showInviteModal, setShowInviteModal,
+        showNotificationHub, setShowNotificationHub,
+        showClockInModal, setShowClockInModal,
+        showBetaSurvey, setShowBetaSurvey,
+        toast, showToast
+    } = useAppUI();
+
+    const {
+        isAuthenticated, setIsAuthenticated,
+        username, setUsername,
+        password, setPassword,
+        loginError, setLoginError,
+        userProfile, setUserProfile,
+        sessionId,
+        hasConsented, setHasConsented,
+        firebaseUser, setFirebaseUser
+    } = useAuth();
+
     const [updating, setUpdating] = useState(false);
     const [showCelebration, setShowCelebration] = useState(false);
     const [celebrationTitle, setCelebrationTitle] = useState('TARGET SMASHED!');
     const [celebrationSubtitle, setCelebrationSubtitle] = useState('You are absolute machine!');
     const [backgroundNotice, setBackgroundNotice] = useState<{show: boolean, msg: string} | null>(null);
-    const wakeLockRef = useRef<any>(null);
-    const [username, setUsername] = useState(() => {
-        return localStorage.getItem('lastUser') || '';
-    });
-    const [password, setPassword] = useState('');
     const [isUnlockingCaseCount, setIsUnlockingCaseCount] = useState(false);
     const [isEditingCaseCount, setIsEditingCaseCount] = useState(false);
-    const [sessionId] = useState(() => {
-        let sid = localStorage.getItem('sessionId');
-        if (!sid) {
-            sid = crypto.randomUUID();
-            localStorage.setItem('sessionId', sid);
-        }
-        return sid;
-    });
     const [unlockPin, setUnlockPin] = useState('');
     const [unlockError, setUnlockError] = useState('');
     const [tempCaseCount, setTempCaseCount] = useState('');
 
-    const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+    const [activeInteraction, setActiveInteraction] = useState<SocialInteraction | null>(null);
+
+    useEffect(() => {
+        const handleError = (event: ErrorEvent) => {
+            console.error("Caught error:", event.error);
+            showToast("Critical UI Error detected: " + (event.error?.message || "Verify data integrity"), "error");
+        };
+        const handleRejection = (event: PromiseRejectionEvent) => {
+            console.error("Sync failure detected:", event.reason);
+            showToast("Data sync pending or interrupted. Connection unstable.", "error");
+        };
+
+        window.addEventListener('error', handleError);
+        window.addEventListener('unhandledrejection', handleRejection);
+        return () => {
+            window.removeEventListener('error', handleError);
+            window.removeEventListener('unhandledrejection', handleRejection);
+        };
+    }, [showToast]);
 
     const isUserAdmin = () => {
         if (userProfile?.role === UserRole.ADMIN) return true;
@@ -303,88 +187,15 @@ export default function App() {
     const [showAbout, setShowAbout] = useState(false);
     const [showAboutDeveloper, setShowAboutDeveloper] = useState(false);
 
-    const [shiftData, setShiftData] = useState(() => {
-        try {
-            const lastUser = localStorage.getItem('lastUser');
-            const keys = Object.keys(localStorage);
-            
-            // Try to find the best candidate key
-            let candidateKey = lastUser ? `pickData_${lastUser}` : 'pickData';
-            
-            // Check if our preferred key exists and is valid, otherwise look for others
-            let rawData = localStorage.getItem(candidateKey);
-            
-            if (!rawData) {
-                // Try any pickData key as a fallback
-                const fallbackKey = keys.find(k => k.startsWith('pickData') && !k.includes('corrupted'));
-                if (fallbackKey) {
-                    candidateKey = fallbackKey;
-                    rawData = localStorage.getItem(fallbackKey);
-                }
-            }
-
-            if (!rawData) return defaultShiftData;
-            
-            try {
-                const parsed = JSON.parse(rawData);
-                return processLoadedData(parsed, defaultShiftData);
-            } catch (e) {
-                // Failed to parse shiftData; using defaults.
-                localStorage.setItem(`pickData_corrupted_${Date.now()}`, rawData);
-                localStorage.removeItem(candidateKey); // Remove corrupt entry
-                return defaultShiftData;
-            }
-        } catch (e) {
-            // Fallback to defaults.
-            return defaultShiftData;
-        }
-    });
-
-    useEffect(() => {
-        const hydrateFromPreferences = async () => {
-            try {
-                // Silently migrate legacy localStorage shift data to high-capacity IndexedDB
-                migrateLocalStorageToIndexedDB().catch(() => {});
-
-                const { value: lastUser } = await Preferences.get({ key: 'lastUser' });
-                const userOp = lastUser || localStorage.getItem('lastUser') || 'default';
-                const prefKey = lastUser ? `pickData_${lastUser}` : 'pickData';
-                const { value: rawPrefData } = await Preferences.get({ key: prefKey });
-                
-                // Also retrieve locally stored IndexedDB Rota for instant rendering
-                const localDbRota = await getLocalRota(userOp);
-                
-                if (rawPrefData || localDbRota) {
-                    const parsed = rawPrefData ? JSON.parse(rawPrefData) : {};
-                    setShiftData((prev: any) => {
-                        let nextConfig = parsed.rotaConfig || prev.rotaConfig;
-                        let nextOverrides = parsed.rotaOverrides || prev.rotaOverrides;
-
-                        if (localDbRota?.rotaConfig && (!nextConfig || !nextConfig.anchorDate)) {
-                            nextConfig = localDbRota.rotaConfig;
-                        }
-                        if (localDbRota?.rotaOverrides) {
-                            nextOverrides = { ...(nextOverrides || {}), ...localDbRota.rotaOverrides };
-                        }
-
-                        if (!prev.lastStopTimestamp || (parsed.lastStopTimestamp && parsed.lastStopTimestamp > prev.lastStopTimestamp) || (parsed.totalCases && parsed.totalCases > prev.totalCases) || localDbRota) {
-                            return { 
-                                ...defaultShiftData, 
-                                ...prev,
-                                ...parsed, 
-                                rotaConfig: nextConfig, 
-                                rotaOverrides: nextOverrides 
-                            };
-                        }
-                        return prev;
-                    });
-                }
-            } catch (e) {
-                // Failed to hydrate from Preferences.
-            }
-        };
-        hydrateFromPreferences();
-    }, []);
+    const { 
+        shiftData, setShiftData, 
+        caseCount, setCaseCount, 
+        lane1, setLane1, 
+        lane2, setLane2, 
+        lane3, setLane3, 
+        lane4, setLane4, 
+        shiftNotes, setShiftNotes 
+    } = useShiftData();
 
     const [currentWarehouseId, setCurrentWarehouseId] = useState('MAIN');
     const [warehouseConfig, setWarehouseConfig] = useState<WarehouseSettings | null>(null);
@@ -483,14 +294,7 @@ export default function App() {
     const isOnBreak = shiftData.isOnBreak;
     const breakStartTime = shiftData.breakStartTime;
     
-    const [caseCount, setCaseCount] = useState(shiftData.caseCount || '');
-    const [lane1, setLane1] = useState(() => localStorage.getItem('draft_lane1') || shiftData.lane1 || '');
-    const [lane2, setLane2] = useState(() => localStorage.getItem('draft_lane2') || shiftData.lane2 || '');
-    const [lane3, setLane3] = useState(() => localStorage.getItem('draft_lane3') || shiftData.lane3 || '');
-    const [lane4, setLane4] = useState(() => localStorage.getItem('draft_lane4') || shiftData.lane4 || '');
-    const [showSummary, setShowSummary] = useState(shiftData.isShiftFinalized);
     const [isSavingShift, setIsSavingShift] = useState(false);
-    const [showSettings, setShowSettings] = useState(false);
     const [pendingStoreLabel, setPendingStoreLabel] = useState("");
     const [pendingLabelImages, setPendingLabelImages] = useState<string[]>([]);
     const [pendingStoreLabels, setPendingStoreLabels] = useState<string[]>([]);
@@ -505,8 +309,6 @@ export default function App() {
     const [newUserPin, setNewUserPin] = useState('');
     const [adminUsersDb, setAdminUsersDb] = useState<any[] | null>(null);
     const [adminTargetRate, setAdminTargetRate] = useState('');
-    const [showHistory, setShowHistory] = useState(false);
-    const [showRota, setShowRota] = useState(false);
     const [rotaEditMode, setRotaEditMode] = useState(false);
     const [selectedFutureDate, setSelectedFutureDate] = useState<Date | null>(null);
     const [viewingPastSummary, setViewingPastSummary] = useState<any | null>(null);
@@ -550,16 +352,13 @@ export default function App() {
             console.warn('Failed to persist updated order label:', e);
         }
     };
+
     const [rotaSubTab, setRotaSubTab] = useState<'calendar' | 'history'>('calendar');
-    const [showRestoreModal, setShowRestoreModal] = useState(false);
     const [restoreText, setRestoreText] = useState('');
     const [restoreStatus, setRestoreStatus] = useState<{ type: 'success' | 'error' | 'info'; msg: string } | null>(null);
-    const [showInstallTutorial, setShowInstallTutorial] = useState(false);
-    const [showLeaderboard, setShowLeaderboard] = useState(false);
     const [leaderboardTab, setLeaderboardTab] = useState<'live' | 'prev_month'>('live');
     const [allShiftSummariesList, setAllShiftSummariesList] = useState<ShiftSummary[]>([]);
     const [fetchingMonthlyLeaderboard, setFetchingMonthlyLeaderboard] = useState(false);
-    const [showInviteModal, setShowInviteModal] = useState(false);
     
     const [dbStorageStats, setDbStorageStats] = useState<DBStorageStats | null>(null);
     const [loadingDbStats, setLoadingDbStats] = useState(false);
@@ -567,12 +366,75 @@ export default function App() {
     const [reclaimingSpace, setReclaimingSpace] = useState(false);
     const [spaceReclaimMsg, setSpaceReclaimMsg] = useState<string | null>(null);
     const [inactivityNotifsOn, setInactivityNotifsOn] = useState(() => areInactivityNotifsEnabled());
-    const [showBetaSurvey, setShowBetaSurvey] = useState(false);
     const [monthlyReportNotif, setMonthlyReportNotif] = useState<{ isOpen: boolean; monthName: string; reportKey: string }>({
         isOpen: false,
         monthName: '',
         reportKey: ''
     });
+
+    // Shift Notification Hub State
+    const [shiftNotifications, setShiftNotifications] = useState<ShiftNotification[]>([]);
+
+    const unreadNotificationsCount = useMemo(() => {
+        return shiftNotifications.filter(n => !n.isRead).length;
+    }, [shiftNotifications]);
+
+    // Load persisted shift notifications from IndexedDB for the current user
+    const loadShiftNotifications = useCallback(async (userName: string) => {
+        if (!userName) return;
+        try {
+            const list = await getLocalNotifications(userName);
+            setShiftNotifications(list || []);
+        } catch (err) {
+            console.warn('Failed to load notifications from IndexedDB:', err);
+        }
+    }, []);
+
+    const addShiftNotification = useCallback(async (notif: Omit<ShiftNotification, 'id' | 'timestamp' | 'isRead'> & { id?: string; timestamp?: number; isRead?: boolean }) => {
+        const fullNotif: ShiftNotification = {
+            id: notif.id || `notif_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            operator: notif.operator || shiftData.operator || 'DEFAULT',
+            category: notif.category,
+            title: notif.title,
+            message: notif.message,
+            timestamp: notif.timestamp || Date.now(),
+            isRead: notif.isRead ?? false,
+            interactionType: notif.interactionType,
+            senderName: notif.senderName,
+            data: notif.data
+        };
+
+        setShiftNotifications(prev => [fullNotif, ...prev.filter(p => p.id !== fullNotif.id)]);
+        try {
+            await saveLocalNotification(fullNotif);
+        } catch (e) {
+            console.warn('Failed to save notification to IndexedDB:', e);
+        }
+    }, [shiftData.operator]);
+
+    const handleMarkNotificationAsRead = useCallback(async (id: string) => {
+        setShiftNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
+        try {
+            await markNotificationAsRead(id);
+        } catch (e) {}
+    }, []);
+
+    const handleMarkAllNotificationsAsRead = useCallback(async () => {
+        const op = shiftData.operator || userProfile?.username || 'DEFAULT';
+        setShiftNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+        try {
+            await markAllNotificationsAsRead(op);
+        } catch (e) {}
+    }, [shiftData.operator, userProfile?.username]);
+
+    const handleClearAllNotifications = useCallback(async () => {
+        const op = shiftData.operator || userProfile?.username || 'DEFAULT';
+        setShiftNotifications([]);
+        try {
+            await clearLocalNotifications(op);
+            showToast("Notification history cleared", "info");
+        } catch (e) {}
+    }, [shiftData.operator, userProfile?.username, showToast]);
 
     useEffect(() => {
         // Record user activity and initialize 3-day inactivity notification scheduler
@@ -719,19 +581,12 @@ export default function App() {
     const [liveUsers, setLiveUsers] = useState<any[]>([]);
     const [shiftSummaries, setShiftSummaries] = useState<ShiftSummary[]>([]);
     const [adminAllSummaries, setAdminAllSummaries] = useState<ShiftSummary[]>([]);
-    const [showClockInModal, setShowClockInModal] = useState(false);
     const [manualClockType, setManualClockType] = useState<'in' | 'out'>('in');
     
     const [isAppBlocked, setIsAppBlocked] = useState(false);
     const [minAllowedVersion, setMinAllowedVersion] = useState('');
     const [consentUpdate, setConsentUpdate] = useState(false);
-    const [shiftNotes, setShiftNotes] = useState(() => localStorage.getItem('draft_operatorNote') || '');
-    // Ensure explicit check for 'true' string
-    const [hasConsented, setHasConsented] = useState(() => localStorage.getItem('userConsented') === 'true');
-    useEffect(() => {
-        console.log("Has consented:", hasConsented);
-    }, [hasConsented]);
-
+    
     // Offline / Connection State
     const [isOffline, setIsOffline] = useState(!navigator.onLine);
     const [failedUploads, setFailedUploads] = useState<any[]>(() => {
@@ -1180,6 +1035,43 @@ export default function App() {
         }
     };
 
+    const handleSetDayOverride = useCallback((overrideType: 'work' | 'holiday' | 'sick' | 'off' | 'reset') => {
+        if (!selectedFutureDate) return;
+        const dateStr = getLocalDateString(selectedFutureDate);
+        const opName = (shiftData.operator || localStorage.getItem('lastUser') || 'default').toUpperCase().trim();
+        let updatedOverrides: Record<string, string> = {};
+        
+        setShiftData((prev: any) => {
+            const nextOverrides = { ...(prev.rotaOverrides || {}) };
+            if (overrideType === 'reset') {
+                delete nextOverrides[dateStr];
+            } else if (overrideType === 'work') {
+                nextOverrides[dateStr] = 'work';
+            } else {
+                nextOverrides[dateStr] = overrideType;
+            }
+            updatedOverrides = nextOverrides;
+            const updated = {
+                ...prev,
+                rotaOverrides: nextOverrides
+            };
+            safeLocalStorage.setItem(`pickData_${opName}`, JSON.stringify(updated), true);
+            safeLocalStorage.setItem('lastUser', opName);
+            return updated;
+        });
+
+        const uid = userProfile?.uid || auth.currentUser?.uid;
+        if (uid) {
+            saveUserProfile(uid, opName, userProfile?.pin, {
+                rotaConfig: shiftData.rotaConfig,
+                rotaOverrides: updatedOverrides
+            });
+        }
+
+        setSelectedFutureDate(null);
+        announce(`Rota override updated for this date!`);
+    }, [selectedFutureDate, shiftData.operator, shiftData.rotaConfig, userProfile, announce]);
+
     const lastAnnouncedRate = useRef(0);
     useEffect(() => {
         if (shiftData.voiceEnabled && rate > 0) {
@@ -1214,100 +1106,10 @@ export default function App() {
 
 
 
-    const [toast, setToast] = useState<{message: string, type: 'error' | 'success' | 'info'} | null>(null);
-    const [activeInteraction, setActiveInteraction] = useState<SocialInteraction | null>(null);
 
-    const showToast = useCallback((message: string, type: 'error' | 'success' | 'info' = 'info') => {
-        setToast({ message, type });
-        setTimeout(() => setToast(null), 4000);
-    }, []);
-
-    useEffect(() => {
-        const handleError = (event: ErrorEvent) => {
-            console.error("Caught error:", event.error);
-            showToast("Critical UI Error detected: " + (event.error?.message || "Verify data integrity"), "error");
-        };
-        const handleRejection = (event: PromiseRejectionEvent) => {
-            console.error("Sync failure detected:", event.reason);
-            showToast("Data sync pending or interrupted. Connection unstable.", "error");
-        };
-
-        window.addEventListener('error', handleError);
-        window.addEventListener('unhandledrejection', handleRejection);
-        return () => {
-            window.removeEventListener('error', handleError);
-            window.removeEventListener('unhandledrejection', handleRejection);
-        };
-    }, [showToast]);
 
     const [confirmDialog, setConfirmDialog] = useState<{title: string, message: string, isAlert?: boolean, onConfirm: () => void, onCancel: () => void} | null>(null);
 
-    // Forensic Helper: Safe Local Storage with Automatic Self-Healing Quota Recovery
-    const safeLocalStorage = useMemo(() => ({
-        setItem: (key: string, value: string, isCritical = false) => {
-            try {
-                localStorage.setItem(key, value);
-            } catch (e) {
-                if (e instanceof DOMException && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED')) {
-                    console.warn("[STORAGE QUOTA] Quota exceeded for key:", key, "Executing auto-pruning...");
-                    
-                    try {
-                        // 1. Clear temporary drafts, sync leftovers, and corrupted dumps
-                        const keysToRemove: string[] = [];
-                        for (let i = 0; i < localStorage.length; i++) {
-                            const k = localStorage.key(i);
-                            if (!k) continue;
-                            if (
-                                k.startsWith('draft_') ||
-                                k.startsWith('pickData_corrupted_') ||
-                                k.startsWith('last_fetch_') ||
-                                k.startsWith('failed_order_uploads') ||
-                                k.startsWith('temp_') ||
-                                k.includes('_corrupted_') ||
-                                k === 'cached_leaderboard'
-                            ) {
-                                keysToRemove.push(k);
-                            }
-                        }
-                        keysToRemove.forEach(k => localStorage.removeItem(k));
-
-                        // 2. Trim local shift histories to keep the most recent 15 records
-                        for (let i = 0; i < localStorage.length; i++) {
-                            const k = localStorage.key(i);
-                            if (k && (k.startsWith('shift_history_') || k.startsWith('offline_shifts_'))) {
-                                try {
-                                    const raw = localStorage.getItem(k);
-                                    if (raw) {
-                                        const parsed = JSON.parse(raw);
-                                        if (Array.isArray(parsed) && parsed.length > 15) {
-                                            localStorage.setItem(k, JSON.stringify(parsed.slice(0, 15)));
-                                        }
-                                    }
-                                } catch {
-                                    // ignore individual parse errors
-                                }
-                            }
-                        }
-
-                        // 3. Retry saving the required item
-                        localStorage.setItem(key, value);
-                        console.log("[STORAGE QUOTA] Auto-pruning successful. Data saved cleanly.");
-                        return;
-                    } catch (recoveryErr) {
-                        console.error("[STORAGE QUOTA] Auto-recovery space release failed:", recoveryErr);
-                    }
-
-                    if (isCritical) {
-                        showToast("Storage quota nearly full. Old cache automatically pruned.", "info");
-                    } else {
-                        showToast("Local cache pruned to maintain optimal performance.", "info");
-                    }
-                }
-            }
-        },
-        getItem: (key: string) => localStorage.getItem(key),
-        removeItem: (key: string) => localStorage.removeItem(key)
-    }), [showToast]);
     const rateRef = useRef(rate);
     const activeElapsedSecondsRef = useRef(activeElapsedSeconds);
     const totalCasesRef = useRef(shiftData.totalCases);
@@ -1481,7 +1283,7 @@ export default function App() {
     };
 
     const [duoMessage, setDuoMessage] = useState(getDuoMessage);
-    const [wakeLockError, setWakeLockError] = useState<string | null>(null);
+    const { wakeLockError } = useWakeLock(shiftData.wakeLock || false, isAuthenticated);
     const isInIframe = useMemo(() => {
         try {
             return window.self !== window.top;
@@ -1489,45 +1291,6 @@ export default function App() {
             return true;
         }
     }, []);
-
-    // --- Wake Lock Management ---
-    useEffect(() => {
-        const handleWakeLock = async () => {
-            if (shiftData.wakeLock && 'wakeLock' in navigator && isAuthenticated) {
-                try {
-                    wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
-                    setWakeLockError(null);
-                    wakeLockRef.current.addEventListener('release', () => {
-                        // Wake lock released
-                    });
-                } catch (err: any) {
-                    // Error during operation.
-                    setWakeLockError(err.message);
-                }
-            } else {
-                if (wakeLockRef.current) {
-                    wakeLockRef.current.release();
-                    wakeLockRef.current = null;
-                }
-                setWakeLockError(null);
-            }
-        };
-
-        handleWakeLock();
-
-        // Re-acquire lock if page becomes visible again
-        const handleVisibility = () => {
-            if (document.visibilityState === 'visible' && shiftData.wakeLock) {
-                handleWakeLock();
-            }
-        };
-
-        document.addEventListener('visibilitychange', handleVisibility);
-        return () => {
-            document.removeEventListener('visibilitychange', handleVisibility);
-            if (wakeLockRef.current) wakeLockRef.current.release();
-        };
-    }, [shiftData.wakeLock, isAuthenticated]);
 
     // --- Background "Catch Up" logic ---
     useEffect(() => {
@@ -1553,8 +1316,6 @@ export default function App() {
         }
     }, [isPicking, shiftData.operator]);
     
-    const lastStepTime = useRef(0);
-
     useEffect(() => {
         const interval = setInterval(() => setNow(new Date()), 1000);
         return () => clearInterval(interval);
@@ -1636,10 +1397,12 @@ export default function App() {
         if (shiftData.operator) {
             safeLocalStorage.setItem(`pickData_${shiftData.operator}`, rawJson, true);
             safeLocalStorage.setItem('lastUser', shiftData.operator);
+            saveLocalActiveShift(shiftData.operator, dataToSave).catch(() => {});
             Preferences.set({ key: `pickData_${shiftData.operator}`, value: rawJson }).catch(e => { /* Silently fail */ });
             Preferences.set({ key: 'lastUser', value: shiftData.operator }).catch(e => { /* Silently fail */ });
         } else {
             safeLocalStorage.setItem('pickData', rawJson, true);
+            saveLocalActiveShift('default', dataToSave).catch(() => {});
             Preferences.set({ key: 'pickData', value: rawJson }).catch(e => { /* Silently fail */ });
         }
     }, [shiftData, caseCount, lane1, lane2, lane3, lane4]);
@@ -1764,18 +1527,35 @@ export default function App() {
 
     // Peer Social Interactions Subscription (Pokes, Cheers, Kudos, Banter)
     useEffect(() => {
-        const targetOp = shiftData.operator || userProfile?.username;
+        const targetOp = (shiftData.operator || userProfile?.username || '').toUpperCase().trim();
         if (!targetOp) return;
+
+        // Load existing notifications from IndexedDB for this operator
+        loadShiftNotifications(targetOp);
 
         const unsubscribe = subscribeToIncomingInteractions(targetOp, (interaction) => {
             setActiveInteraction(interaction);
             deviceHapticService('medium');
             playAlertSound('success');
+
+            // Persist peer interaction in Shift Notification Hub
+            addShiftNotification({
+                id: interaction.id || `peer_${Date.now()}`,
+                operator: targetOp,
+                category: 'peer',
+                title: `${interaction.senderName || 'Teammate'} interacted with you`,
+                message: interaction.message,
+                interactionType: interaction.type,
+                senderName: interaction.senderName,
+                timestamp: interaction.createdAt ? new Date(interaction.createdAt).getTime() : Date.now(),
+                isRead: false
+            });
+
             setTimeout(() => setActiveInteraction(null), 6000);
         });
 
         return () => unsubscribe();
-    }, [shiftData.operator, userProfile?.username]);
+    }, [shiftData.operator, userProfile?.username, loadShiftNotifications, addShiftNotification]);
 
     // Programmatic Auto-Cleanup and Missing Shift Recovery
     useEffect(() => {
@@ -2371,113 +2151,15 @@ export default function App() {
         }
     };
 
-    const [isMotionGranted, setIsMotionGranted] = useState(false);
-
-    const requestMotionPermission = async () => {
-        if (typeof (DeviceMotionEvent as any) !== 'undefined' && typeof (DeviceMotionEvent as any).requestPermission === 'function') {
-            try {
-                const permission = await (DeviceMotionEvent as any).requestPermission();
-                if (permission === 'granted') {
-                    setIsMotionGranted(true);
-                }
-            } catch (e) {
-                // Device motion permission rejected or prompt closed
-            }
-        } else if (typeof window !== 'undefined' && 'DeviceMotionEvent' in window) {
-            setIsMotionGranted(true);
-        }
-    };
+    const { isMotionGranted, requestMotionPermission } = useDeviceMotion(
+        shiftData.haptic === 'on',
+        deviceHapticService,
+        setShiftData
+    );
 
     useEffect(() => {
-        requestMotionPermission();
         restoreAndProtectShifts('DASERGHIE');
     }, []);
-
-    const stepState = useRef({
-        movingAverage: 0,
-        baseline: 9.81,
-        isPeak: false,
-        initialized: false
-    });
-
-    useEffect(() => {
-        if (!isMotionGranted) return;
-
-        const handleMotion = (e: DeviceMotionEvent) => {
-            let mag = 0;
-            let isLinear = false;
-
-            // Prefer linear acceleration (gravity component removed by hardware sensor fusion)
-            if (e.acceleration && (e.acceleration.x !== null || e.acceleration.y !== null || e.acceleration.z !== null)) {
-                const ax = e.acceleration.x || 0;
-                const ay = e.acceleration.y || 0;
-                const az = e.acceleration.z || 0;
-                const linearMag = Math.sqrt(ax * ax + ay * ay + az * az);
-                if (linearMag > 0.01) {
-                    mag = linearMag;
-                    isLinear = true;
-                }
-            }
-
-            if (!isLinear && e.accelerationIncludingGravity) {
-                const gx = e.accelerationIncludingGravity.x || 0;
-                const gy = e.accelerationIncludingGravity.y || 0;
-                const gz = e.accelerationIncludingGravity.z || 0;
-                mag = Math.sqrt(gx * gx + gy * gy + gz * gz);
-            }
-
-            if (mag === 0) return;
-
-            if (!stepState.current.initialized) {
-                stepState.current.baseline = mag;
-                stepState.current.movingAverage = mag;
-                stepState.current.initialized = true;
-                return;
-            }
-
-            // Exponential moving average filter for noise suppression
-            stepState.current.baseline = (stepState.current.baseline * 0.99) + (mag * 0.01);
-            stepState.current.movingAverage = (stepState.current.movingAverage * 0.72) + (mag * 0.28);
-
-            // Adaptive threshold calculation
-            const dynamicThreshold = isLinear
-                ? 1.15 // 1.15 m/s^2 linear acceleration peak threshold
-                : Math.max(0.85, stepState.current.baseline * 0.08); // Gravity-relative threshold (~0.85 m/s^2 above baseline)
-
-            if (stepState.current.movingAverage > stepState.current.baseline + dynamicThreshold) {
-                stepState.current.isPeak = true;
-            }
-
-            // Detect peak fall-off (foot strike completion)
-            if (stepState.current.isPeak && stepState.current.movingAverage < stepState.current.baseline + (dynamicThreshold * 0.35)) {
-                const currentTime = Date.now();
-                const delta = currentTime - lastStepTime.current;
-
-                // Human walking cadence constraint: 250ms to 1400ms per step (~42-240 steps/min)
-                if (delta > 250 && delta < 1400) {
-                    lastStepTime.current = currentTime;
-                    stepState.current.isPeak = false;
-
-                    const currentBackup = parseInt(localStorage.getItem('shiftStepBackup') || '0', 10);
-                    const nextBackup = currentBackup + 1;
-                    localStorage.setItem('shiftStepBackup', nextBackup.toString());
-
-                    setShiftData((prev: any) => ({ ...prev, steps: nextBackup }));
-
-                    if (shiftData.haptic === 'on') deviceHapticService('light');
-                } else if (delta >= 1400) {
-                    // Reset peak state if time between strides exceeds walking window
-                    lastStepTime.current = currentTime;
-                    stepState.current.isPeak = false;
-                }
-            }
-        };
-
-        window.addEventListener('devicemotion', handleMotion);
-        return () => {
-            window.removeEventListener('devicemotion', handleMotion);
-        };
-    }, [isMotionGranted, shiftData.haptic]); // Re-bind if haptic pref changes, but cleanly handles listener
 
 
     const masterStart = () => {
@@ -3794,70 +3476,87 @@ export default function App() {
                 )}
             </div>
 
-            <div className={`relative z-[60] ${theme.panel.includes('black') ? 'bg-black' : 'bg-slate-900'} pt-3 pb-3.5 px-4 shadow-lg border-b border-slate-800/80 flex flex-col shrink-0`}>
-                <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-3.5 min-w-0">
-                        <Logo size="lg" theme={theme} className="shrink-0" />
-                        <div className="flex flex-col justify-center min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                                <h1 className="text-2xl sm:text-3xl font-black italic tracking-tight text-white leading-none">
-                                    <span className="bg-gradient-to-r from-white via-slate-100 to-emerald-400 bg-clip-text text-transparent drop-shadow-sm">PickApp</span>
-                                </h1>
-                                <span className="text-[9px] font-mono font-bold text-slate-500 bg-slate-800/80 px-1.5 py-0.5 rounded border border-slate-700/60 not-italic">
-                                    v{APP_VERSION}
-                                </span>
-                                <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider px-2.5 py-0.5 rounded-lg bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-sm not-italic">
-                                    {currentDept?.name || 'Aisles'}
-                                </span>
-                                {shiftData.storeLabel && (
-                                    <span className="text-[10px] sm:text-xs font-black text-sky-400 bg-sky-500/15 px-2.5 py-0.5 rounded-lg border border-sky-500/30 uppercase tracking-widest leading-none shadow-sm not-italic">
-                                        {shiftData.storeLabel}
-                                    </span>
-                                )}
-                            </div>
-                            <div className="flex items-center gap-2 mt-1">
-                                <span className="text-[9px] text-slate-400 font-extrabold uppercase tracking-[0.2em] leading-none truncate">
-                                    Precision Picking • Peak Performance
-                                </span>
-                                {isOffline && (
-                                    <span className="text-[8px] font-black text-red-400 bg-red-500/20 px-1.5 py-0.5 rounded border border-red-500/30 uppercase tracking-widest leading-none shrink-0">
-                                        Offline
-                                    </span>
-                                )}
-                            </div>
+            <div className={`relative z-[60] ${theme.panel.includes('black') ? 'bg-black' : 'bg-slate-900'} pt-3 pb-3 px-4 shadow-lg border-b border-slate-800/80 flex flex-col shrink-0`}>
+                {/* Row 1: Brand & Control Actions */}
+                <div className="flex justify-between items-center w-full">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                        <Logo size="md" theme={theme} className="shrink-0" />
+                        <div className="flex items-baseline gap-1.5 min-w-0">
+                            <h1 className="text-xl sm:text-2xl font-black italic tracking-tight text-white leading-none">
+                                <span className="bg-gradient-to-r from-white via-slate-100 to-emerald-400 bg-clip-text text-transparent drop-shadow-sm">PickApp</span>
+                            </h1>
+                            <span className="text-[8px] font-mono font-black text-slate-500 bg-slate-800/80 px-1.5 py-0.5 rounded border border-slate-700/60 leading-none select-none">
+                                v{APP_VERSION}
+                            </span>
                         </div>
                     </div>
-                    <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 ml-2">
-                        <div className="flex gap-2 relative z-[80]">
+                    <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                        <div className="flex gap-1.5 relative z-[80]">
                             {availableUpdate && (
                                 <div className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 rounded-full border-2 border-slate-900 z-20 animate-pulse" />
                             )}
                             <button 
-                                className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-750 transition-colors active:scale-95 shadow-sm"
+                                id="open-notification-hub-btn"
+                                className="w-10 h-10 rounded-xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-750 transition-colors active:scale-95 shadow-sm relative"
+                                onClick={(e) => { e.stopPropagation(); haptic('light'); setShowNotificationHub(true); }}
+                                aria-label="Shift Notifications"
+                                title="Shift Notifications & Interactions"
+                            >
+                                <Bell size={18} />
+                                {unreadNotificationsCount > 0 && (
+                                    <span className="absolute -top-1 -right-1 min-w-[16px] h-[16px] px-1 bg-indigo-500 border border-slate-900 rounded-full text-[9px] font-black text-white flex items-center justify-center shadow-md animate-pulse">
+                                        {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+                                    </span>
+                                )}
+                            </button>
+                            <button 
+                                className="w-10 h-10 rounded-xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-750 transition-colors active:scale-95 shadow-sm"
                                 onClick={(e) => { e.stopPropagation(); haptic('light'); setShowRota(true); setRotaEditMode(false); }}
                                 aria-label="My Rota"
                                 title="My Rota"
                             >
-                                <Calendar size={20} />
+                                <Calendar size={18} />
                             </button>
                             <button 
-                                className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-750 transition-colors active:scale-95 shadow-sm"
+                                className="w-10 h-10 rounded-xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-750 transition-colors active:scale-95 shadow-sm"
                                 onClick={(e) => { e.stopPropagation(); haptic('light'); setShowLeaderboard(true); }}
                                 aria-label="View Leaderboard"
                                 title="View Leaderboard"
                             >
-                                <Trophy size={20} />
+                                <Trophy size={18} />
                             </button>
                             <button 
-                                className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-750 transition-colors active:scale-95 shadow-sm"
+                                className="w-10 h-10 rounded-xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-750 transition-colors active:scale-95 shadow-sm"
                                 onClick={(e) => { e.stopPropagation(); haptic('light'); setShowSettings(!showSettings); }}
                                 aria-label="Open Settings"
                                 title="Open Settings"
                             >
-                                <Settings size={20} />
+                                <Settings size={18} />
                             </button>
                         </div>
                     </div>
+                </div>
+
+                {/* Row 2: Status Badges, Context Tags & Taglines */}
+                <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-800/40 min-w-0">
+                    <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                        <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 shadow-sm leading-none not-italic">
+                            {currentDept?.name || 'Aisles'}
+                        </span>
+                        {shiftData.storeLabel && (
+                            <span className="text-[10px] font-black text-sky-400 bg-sky-500/10 px-2.5 py-0.5 rounded-md border border-sky-500/25 uppercase tracking-widest leading-none shadow-sm not-italic">
+                                {shiftData.storeLabel}
+                            </span>
+                        )}
+                        {isOffline && (
+                            <span className="text-[9px] font-black text-red-400 bg-red-500/15 px-1.5 py-0.5 rounded border border-red-500/25 uppercase tracking-widest leading-none">
+                                Offline
+                            </span>
+                        )}
+                    </div>
+                    <span className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest leading-none truncate ml-2">
+                        Precision Picking
+                    </span>
                 </div>
 
                 {/* APK Update Banner */}
@@ -3883,2564 +3582,192 @@ export default function App() {
             <div className="flex-1 overflow-hidden relative pb-6 text-white font-sans">
                 {/* Voice Task Monitor & Overlays */}
                 {activeScreen === 0 && (
-                    <div id="screen-picking" className="h-full flex flex-col">
-                        <div id="scrollable-dashboard" className="flex-1 overflow-y-auto no-scrollbar pb-safe-bottom">
-                            <div id="dashboard-content" className="p-4 max-w-md mx-auto space-y-4">
-                                
-                                {/* Wake Lock Active Indicator */}
-                                {shiftData.wakeLock && (
-                                    <motion.div 
-                                        initial={{ opacity: 0, scale: 0.8 }}
-                                        animate={{ opacity: 1, scale: 1 }}
-                                        className="flex items-center gap-1.5 bg-sky-500/10 px-3 py-1.5 rounded-full border border-sky-500/20 text-[10px] font-bold text-sky-400 uppercase tracking-widest mb-4 self-center"
-                                    >
-                                        <Zap size={12} className="fill-sky-400 animate-pulse" /> Always-On Display Active
-                                    </motion.div>
-                                )}
-
-                                {/* Firestreak Indicator */}
-                                {(shiftData.firestreak || 0) > 0 && (
-                                    <motion.div 
-                                        initial={{ opacity: 0, y: -10 }} 
-                                        animate={{ opacity: 1, y: 0 }}
-                                        className="flex items-center gap-2 bg-orange-500/10 px-4 py-2 rounded-2xl border border-orange-500/20 mb-4"
-                                    >
-                                        <div className="p-1.5 bg-orange-500 rounded-lg shadow-lg shadow-orange-500/20">
-                                            <Flame size={14} className="text-slate-950 fill-slate-950" />
-                                        </div>
-                                        <div className="flex flex-col">
-                                            <span className="text-[10px] font-black text-orange-500 uppercase tracking-widest leading-none">Firestreak Active</span>
-                                            <span className="text-xs font-black text-white uppercase tracking-tighter mt-1">{shiftData.firestreak} CONSECUTIVE TARGETS</span>
-                                        </div>
-                                    </motion.div>
-                                )}
-
-                                {/* picking dashboard */}
-                                <PickingDashboard 
-                                    isPicking={isPicking}
-                                    theme={theme}
-                                    isWarning={isWarning}
-                                    caseCount={caseCount}
-                                    isCaseCountModified={shiftData.isCaseCountModified}
-                                    onEditCaseCount={() => {
-                                        haptic('medium');
-                                        setIsUnlockingCaseCount(true);
-                                        setUnlockPin('');
-                                        setUnlockError('');
-                                    }}
-                                    currentDept={currentDept}
-                                    finishTime={finishTime}
-                                    stats={stats}
-                                    breakTimeDuringCurrentPick={breakTimeDuringCurrentPick}
-                                    isOnBreak={isOnBreak}
-                                    breakStartTime={breakStartTime}
-                                    pickStartTime={pickStartTime}
-                                    targetRate={targetRate}
-                                    now={now}
-                                    formatTime={formatTime}
-                                    duoMessage={duoMessage}
-                                    pendingLabelImages={pendingLabelImages}
-                                    pendingStoreLabels={pendingStoreLabels}
-                                />
-
-                                {/* Dashboard Main Content */}
-                                <div className="flex flex-col items-center justify-center py-2">
-                                    <div className="text-4xl font-light tracking-tight text-white font-mono">
-                                        {now.toLocaleTimeString('en-US', { hour12: false })}
-                                    </div>
-                                    {isOnBreak && (
-                                        <div className="mt-2 inline-flex items-center gap-2 bg-amber-500/20 text-amber-400 px-3 py-1 rounded-full text-sm font-medium animate-pulse">
-                                            <Coffee size={14} /> On Break
-                                        </div>
-                                    )}
-                                </div>
-                                
-                                {/* Hands-Free Voice Monitor (MHE Optimized) */}
-                                {shiftData.voiceEnabled && shiftData.voiceTask.aisle && (
-                                    <div className="mb-4 bg-slate-900 border-2 border-sky-500 rounded-[2.5rem] p-6 shadow-2xl shadow-sky-500/20 overflow-hidden relative">
-                                        <div className="absolute top-0 right-0 bg-sky-500 text-slate-950 px-4 py-1 text-[10px] font-black uppercase tracking-widest rounded-bl-2xl">
-                                            Voice Active
-                                        </div>
-                                        <div className="flex flex-col gap-1">
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                                                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Current Instruction</span>
-                                            </div>
-                                            <div className="flex justify-between items-end">
-                                                <div className="flex flex-col">
-                                                    <div className="text-[12px] font-bold text-sky-400 uppercase tracking-widest">Aisle / Slot</div>
-                                                    <div className="text-6xl font-black text-white tracking-tighter leading-none">
-                                                        {shiftData.voiceTask.aisle}<span className="text-slate-600">.</span>{shiftData.voiceTask.slot}
-                                                    </div>
-                                                </div>
-                                                <div className="text-right">
-                                                    <div className="text-[12px] font-bold text-emerald-400 uppercase tracking-widest">Cases</div>
-                                                    <div className="text-6xl font-black text-white leading-none">
-                                                        {shiftData.voiceTask.cases}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            
-                                            <div className="mt-6 pt-4 border-t border-slate-800 flex justify-between items-center">
-                                                <div className="flex flex-col">
-                                                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Status</span>
-                                                    <span className={`text-[13px] font-black uppercase tracking-widest ${shiftData.voiceTask.status === 'awaiting_digits' ? 'text-amber-400' : 'text-emerald-400'}`}>
-                                                        {shiftData.voiceTask.status === 'awaiting_digits' ? '● VERIFY DIGITS' : '● START PICKING'}
-                                                    </span>
-                                                </div>
-                                                {shiftData.voiceTask.status === 'awaiting_digits' && (
-                                                    <div className="bg-slate-950 px-4 py-2 rounded-2xl border border-slate-800">
-                                                        <span className="text-[10px] font-bold text-slate-500 uppercase block mb-0.5">Check Digits</span>
-                                                        <span className="text-2xl font-black text-white tracking-[0.2em]">{shiftData.voiceTask.checkDigits}</span>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Stats Mode Toggle */}
-                                <div className="flex justify-between items-center mb-2 px-1">
-                                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                                        Performance View
-                                    </span>
-                                    <div className="bg-slate-950 border border-slate-800 p-1 rounded-xl inline-flex gap-1">
-                                        <button 
-                                            onClick={() => { haptic('light'); setStatsMode('dept'); }}
-                                            className={`px-3 py-1 text-[9px] font-black uppercase tracking-wider rounded-lg transition-all ${statsMode === 'dept' ? 'bg-slate-800 text-emerald-400 border border-slate-700/50' : 'text-slate-500 border border-transparent'}`}
-                                        >
-                                            {getDeptName(shiftData.department)}
-                                        </button>
-                                        <button 
-                                            onClick={() => { haptic('light'); setStatsMode('shift'); }}
-                                            className={`px-3 py-1 text-[9px] font-black uppercase tracking-wider rounded-lg transition-all ${statsMode === 'shift' ? 'bg-slate-800 text-sky-400 border border-slate-700/50' : 'text-slate-500 border border-transparent'}`}
-                                        >
-                                            Total Shift
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {/* Main Stats Grid */}
-                                <div className="grid grid-cols-2 gap-3 mb-4">
-                                    <MetricCard 
-                                        label={statsMode === 'dept' ? `${getDeptName(shiftData.department)} Rate` : "Total Shift Rate"}
-                                        value={activeCases > 0 && activeElapsed <= 60 ? "CALC..." : (statsMode === 'dept' ? (currentDeptStats.rate || activeRate) : (isShiftFinalized ? finalizedStats?.rate : rate))}
-                                        subValue={statsMode === 'dept' ? `Goal: ${activeTargetRate} P/H • Shift Avg: ${rate} P/H` : `Goal: ${targetRate} P/H • ${getDeptName(shiftData.department)}: ${currentDeptStats.rate} P/H`}
-                                        isGood={statsMode === 'dept' ? currentDeptStats.isRateGood : (isShiftFinalized ? ((finalizedStats?.rate || 0) >= targetRate) : isRateGood)}
-                                        icon={<Trophy size={14} />}
-                                        theme={theme}
-                                    />
-                                    <MetricCard 
-                                        label="Net Saved"
-                                        value={`${net >= 0 ? "+" : "-"}${formatTime(Math.abs(net))}`}
-                                        subValue="Total Shift Vs Target"
-                                        isGood={isNetGood}
-                                        icon={<Clock size={14} />}
-                                        theme={theme}
-                                    />
-                                </div>
-
-                                {/* Secondary Stats Grid */}
-                                <div className="grid grid-cols-3 gap-3">
-                                    <MetricCard 
-                                        label="Cases"
-                                        value={activeCases}
-                                        type="secondary"
-                                        theme={theme}
-                                    />
-                                    <MetricCard 
-                                        label="Shift Time"
-                                        value={formatHHMM(isShiftFinalized ? (finalizedStats?.activeElapsedSeconds || 0) : (statsMode === 'dept' ? activeElapsed : stats.totalShiftSeconds))}
-                                        type="secondary"
-                                        theme={theme}
-                                    />
-                                    <MetricCard 
-                                        label="Break Time"
-                                        value={formatHHMM(statsMode === 'dept' ? currentDeptStats.breakSeconds : totalBreakSeconds)}
-                                        type="secondary"
-                                        theme={theme}
-                                        trend="neutral"
-                                    />
-                                </div>
-
-                                {/* Action Area */}
-                                <div className={`${theme.panel} p-4 ${theme.radius} border mt-2 shadow-2xl`}>
-                                    {!shiftData.firstStartTime ? (
-                                        <div className="space-y-3">
-                                            <button 
-                                                className={`w-full py-5 ${theme.bg} text-white ${theme.radius} font-bold text-lg tracking-wide ${theme.bgHover} active:scale-[0.98] transition-all shadow-lg ${theme.shadow} flex flex-col items-center justify-center gap-1`}
-                                                onClick={masterStart}
-                                            >
-                                                <span>START SHIFT NOW</span>
-                                                <span className="text-[10px] font-medium opacity-80 uppercase tracking-widest leading-none">Clock in: {now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-                                            </button>
-                                            <button 
-                                                className={`w-full py-3.5 bg-slate-800 text-slate-300 ${theme.radius} font-bold text-xs uppercase tracking-widest border border-slate-700 hover:text-white flex items-center justify-center gap-2`}
-                                                onClick={() => { 
-                                                    setManualClockType('in');
-                                                    haptic('light'); 
-                                                    setShowClockInModal(true); 
-                                                }}
-                                            >
-                                                <Clock size={16} /> Manual Clock In
-                                            </button>
-                                        </div>
-                                    ) : (
-                                        <div className="space-y-4">
-                                            <div className="grid grid-cols-4 gap-2">
-                                                {[
-                                                    { id: 1, val: lane1, set: setLane1 },
-                                                    { id: 2, val: lane2, set: setLane2 },
-                                                    { id: 3, val: lane3, set: setLane3 },
-                                                    { id: 4, val: lane4, set: setLane4 }
-                                                ].map(lane => (
-                                                    <div key={lane.id} className={`bg-slate-950 p-2 pb-3 ${theme.radius} border border-slate-800 text-center relative`}>
-                                                        <div className="text-[12px] text-slate-400 font-black uppercase tracking-wider mb-1">L{lane.id}</div>
-                                                        <input 
-                                                            type="number" 
-                                                            className="w-full bg-transparent text-white text-center text-3xl font-black outline-none placeholder:text-slate-800"
-                                                            placeholder="--"
-                                                            value={lane.val}
-                                                            onChange={e => { 
-                                                                const val = e.target.value;
-                                                                lane.set(val); 
-                                                                localStorage.setItem(`draft_lane${lane.id}`, val);
-                                                                haptic('light'); 
-                                                            }}
-                                                            disabled={lane.id === 1 ? isOnBreak : (isPicking || isOnBreak)}
-                                                        />
-                                                        <div className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 bg-slate-800 px-2 py-0.5 rounded-full border border-slate-700 min-w-[44px]">
-                                                            <span className={`text-[14px] font-black tracking-tighter ${theme.text}`}>
-                                                                {(DEPT_LANES[shiftData.department] || 
-                                                                  DEPT_LANES[`${shiftData.zone.toLowerCase()}/${shiftData.department}`] || 
-                                                                  DEPT_LANES[shiftData.zone.toLowerCase()])?.[lane.val] || "---"}
-                                                            </span>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-
-                                            <div className="pt-2">
-                                                {isPicking && finishTime && (
-                                                    <div className="text-center mb-3">
-                                                        <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border ${stats.timeRemainingSecs < 0 ? 'bg-red-500/10 text-red-500 border-red-500/20' : (isWarning ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20')}`}>
-                                                            <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${stats.timeRemainingSecs < 0 ? 'bg-red-500' : (isWarning ? 'bg-amber-400' : 'bg-emerald-400')}`}></div>
-                                                            {stats.timeRemainingSecs < 0 ? 'OVERDUE - TARGET WAS ' : (isWarning ? 'HURRY! FINISH BY ' : 'FINISH BY ')} {finishTime.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second: '2-digit'})} ({stats.currentTargetSeconds > 3600 ? formatHHMM(stats.currentTargetSeconds) : formatTime(stats.currentTargetSeconds)})
-                                                        </span>
-                                                    </div>
-                                                )}
-
-                                                {/* Pre-Pick Label Grid for idle state */}
-                                                {!isPicking && (pendingLabelImages.length > 0 || pendingStoreLabels.length > 0) && (
-                                                    <div className="mb-4 bg-slate-950/30 p-3 rounded-2xl border border-slate-800/40">
-                                                        <div className="flex justify-between items-center mb-2 px-1">
-                                                            <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Stored Labels ({pendingLabelImages.length}/4)</span>
-                                                            <button onClick={() => { setPendingLabelImages([]); setPendingStoreLabels([]); haptic('heavy'); }} className="text-[8px] font-black text-rose-500 uppercase tracking-widest hover:underline">Clear All</button>
-                                                        </div>
-                                                        <div className="grid grid-cols-2 gap-2">
-                                                            {Array.from({ length: Math.max(pendingLabelImages.length, pendingStoreLabels.length) }).map((_, index) => {
-                                                                const img = pendingLabelImages[index];
-                                                                const label = pendingStoreLabels[index] || "NO LABEL TEXT";
-                                                                return (
-                                                                    <div key={index} className="bg-slate-900/50 border border-slate-800/40 rounded-xl p-1.5 flex items-center justify-between gap-2">
-                                                                        <div className="flex items-center gap-2 overflow-hidden min-w-0">
-                                                                            {img ? (
-                                                                                <div className="w-7 h-7 rounded-lg overflow-hidden shrink-0 border border-slate-800 cursor-pointer" onClick={() => setViewingLabels([img])}>
-                                                                                    <img src={img} className="w-full h-full object-cover" />
-                                                                                </div>
-                                                                            ) : <div className="w-7 h-7 rounded-lg bg-slate-950 shrink-0 border border-dashed border-slate-800" />}
-                                                                            <span className="text-[10px] text-white font-mono truncate font-bold">{label}</span>
-                                                                        </div>
-                                                                        <button onClick={() => { setPendingLabelImages(prev => prev.filter((_, i) => i !== index)); setPendingStoreLabels(prev => prev.filter((_, i) => i !== index)); haptic('light'); }} className="text-rose-500/50 hover:text-rose-500 p-1">✕</button>
-                                                                    </div>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    </div>
-                                                )}
-
-                                                <input 
-                                                    type="number" 
-                                                    className={`w-full p-5 mb-4 ${theme.radius} border-2 border-slate-800 bg-slate-950 text-white text-3xl font-light text-center outline-none ${theme.borderFocusLarge} transition-colors disabled:opacity-50 placeholder:text-slate-600`}
-                                                    placeholder="0"
-                                                    inputMode="numeric"
-                                                    value={caseCount}
-                                                    onChange={e => { setCaseCount(e.target.value); haptic('light'); }}
-                                                    disabled={isPicking || isOnBreak}
-                                                />
-
-
-
-                                                {/* Shift Notes / Reminders (Active Picking Screen) */}
-                                                <div className="mb-4 text-left">
-                                                    <label className="block text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-2 ml-1">Shift Notes / Reminders</label>
-                                                    <textarea 
-                                                        className={`w-full bg-slate-950 p-3 rounded-2xl border border-slate-800 text-sm focus:outline-none focus:min-h-[140px] ${theme.borderFocus} text-white transition-all duration-300 min-h-[80px] placeholder:text-slate-600`}
-                                                        placeholder="Type any scratch notes, drop lane hints, or shift reminders here..."
-                                                        value={shiftData.operatorNote || ''}
-                                                        onChange={(e) => {
-                                                            const val = e.target.value;
-                                                            updateShiftData({ operatorNote: val });
-                                                            setShiftNotes(val);
-                                                            localStorage.setItem('draft_operatorNote', val);
-                                                        }}
-                                                        disabled={isOnBreak}
-                                                    />
-                                                    {(shiftData.operatorNote || '').trim() && (
-                                                        <button 
-                                                            type="button"
-                                                            onClick={saveStandaloneNote}
-                                                            className="w-full mt-2 py-2.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 rounded-xl font-bold text-xs uppercase tracking-wider border border-amber-500/20 active:scale-95 transition-all flex items-center justify-center gap-1.5"
-                                                        >
-                                                            <FileText size={14} /> Save Note to History Table
-                                                        </button>
-                                                    )}
-                                                </div>
-
-                                                {/* Gap Timer UI */}
-                                                {!isPicking && !isOnBreak && shiftData.firstStartTime && shiftData.lastStopTimestamp && (
-                                                    <div className={`mb-4 ${theme.panel} ${theme.radius} p-4 border border-slate-800 text-center`}>
-                                                        <div className="text-[11px] text-slate-400 font-bold uppercase tracking-widest mb-1.5 leading-none">3-Min Gap Timer</div>
-                                                        {((now.getTime() - shiftData.lastStopTimestamp) / 1000) >= 180 ? (
-                                                            <div className="text-red-500 font-black text-2xl animate-pulse italic tracking-tight">
-                                                                OVERRIDE: {formatTime(((now.getTime() - shiftData.lastStopTimestamp) / 1000) - 180)}
-                                                            </div>
-                                                        ) : (
-                                                            <div className={`${theme.text} font-black text-3xl italic tracking-tight`}>
-                                                                {formatTime(180 - ((now.getTime() - shiftData.lastStopTimestamp) / 1000))}
-                                                            </div>
-                                                        )}
-                                                        <div className={`w-full bg-slate-800 h-1.5 ${theme.radius} mt-3 overflow-hidden`}>
-                                                            <div 
-                                                                className={`h-full transition-all duration-1000 ${((now.getTime() - shiftData.lastStopTimestamp) / 1000) >= 180 ? 'bg-red-500' : theme.bg}`} 
-                                                                style={{ width: `${Math.min(100, (((now.getTime() - shiftData.lastStopTimestamp) / 1000) / 180) * 100)}%` }}
-                                                            ></div>
-                                                        </div>
-                                                    </div>
-                                                )}
-
-                                                {!isOnBreak ? (
-                                                    <>
-                                                        {!isPicking ? (
-                                                            <button 
-                                                                className={`w-full py-5 bg-emerald-500 text-slate-900 ${theme.radius} font-black text-xl tracking-tighter hover:bg-emerald-400 active:scale-[0.98] transition-all shadow-xl shadow-emerald-500/10 flex items-center justify-center gap-3 min-h-[68px] italic`}
-                                                                onClick={startPick}
-                                                            >
-                                                                <Play fill="currentColor" size={24} /> START PICKING
-                                                            </button>
-                                                        ) : (
-                                                            <button 
-                                                                className={`w-full py-5 bg-red-500 text-white ${theme.radius} font-black text-xl tracking-tighter hover:bg-red-400 active:scale-[0.98] transition-all shadow-xl shadow-red-500/10 flex items-center justify-center gap-3 min-h-[68px] italic`}
-                                                                onClick={stopPick}
-                                                            >
-                                                                <Square fill="currentColor" size={24} /> FINISH PICKING
-                                                            </button>
-                                                        )}
-                                                        
-                                                        <button 
-                                                            className={`w-full mt-4 py-5 bg-slate-900 text-slate-300 ${theme.radius} font-black text-sm tracking-widest uppercase hover:bg-slate-800 active:scale-[0.98] transition-all flex items-center justify-center gap-3 border border-slate-800 shadow-lg min-h-[60px]`}
-                                                            onClick={startPaidBreak}
-                                                        >
-                                                            <Coffee size={20} className="text-amber-500" /> START PAID BREAK
-                                                        </button>
-                                                    </>
-                                                ) : (
-                                                    <button 
-                                                        className={`w-full py-5 bg-amber-500 text-slate-900 ${theme.radius} font-bold text-lg tracking-wide hover:bg-amber-400 active:scale-[0.98] transition-all shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2`}
-                                                        onClick={stopPaidBreak}
-                                                    >
-                                                        <Play fill="currentColor" size={20} /> RESUME SHIFT
-                                                    </button>
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* History Section */}
-                                {shiftData.history.length > 0 && (
-                                    <div className="mt-8">
-                                        <div className="flex justify-between items-end mb-4 px-1">
-                                            <h3 className={`text-sm font-bold text-white tracking-tight flex items-center gap-2 ${theme.font}`}>
-                                                Pick History
-                                                <span className={`text-[10px] font-black text-slate-500 uppercase tracking-widest bg-slate-900 px-2 py-0.5 ${theme.radius} border border-slate-800`}>{shiftData.history.filter((h: any) => h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote).length} RECORDS</span>
-                                            </h3>
-                                        </div>
-
-                                        {/* Enhanced Shift Analytics: Consistency & Best Pick */}
-                                        <div className="grid grid-cols-2 gap-3 mb-4">
-                                            <div className={`${theme.panel} p-3 ${theme.radius} border border-slate-800 flex items-center gap-3`}>
-                                                <div className="w-8 h-8 rounded-lg bg-sky-500/10 text-sky-400 flex items-center justify-center shrink-0 border border-sky-400/20">
-                                                    <Award size={16} />
-                                                </div>
-                                                <div>
-                                                    <div className="text-[8px] text-slate-500 font-black uppercase tracking-tighter">Consistency</div>
-                                                    <div className="text-sm font-black text-white italic">
-                                                        {consistencyPercent}%
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div className={`${theme.panel} p-3 ${theme.radius} border border-slate-800 flex items-center gap-3`}>
-                                                <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0 border border-amber-400/20">
-                                                    <Zap size={16} />
-                                                </div>
-                                                <div>
-                                                    <div className="text-[8px] text-slate-500 font-black uppercase tracking-tighter">Shift Best</div>
-                                                    <div className="text-sm font-black text-white italic">
-                                                        {shiftBestRate} <span className="text-[9px] font-bold text-slate-600 not-italic">PH</span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div className={`${theme.panel} ${theme.radius} border border-slate-800 overflow-hidden relative shadow-xl`}>
-                                            <div 
-                                                className="max-h-[320px] sm:max-h-[400px] overflow-y-auto overflow-x-auto no-scrollbar"
-                                                onTouchStart={(e) => e.stopPropagation()}
-                                                onTouchMove={(e) => e.stopPropagation()}
-                                                onTouchEnd={(e) => e.stopPropagation()}
-                                            >
-                                                <table className="w-full text-[10px] sm:text-xs">
-                                                    <thead>
-                                                        <tr className="sticky top-0 bg-slate-900 text-slate-400 border-b border-slate-800 z-10 text-[9px] sm:text-[10px] uppercase font-black tracking-wider">
-                                                            <th className="py-2.5 px-2 sm:px-3.5 text-left whitespace-nowrap text-slate-500">Start</th>
-                                                            <th className="py-2.5 px-2 sm:px-3.5 text-left whitespace-nowrap text-slate-500">Label</th>
-                                                            <th className="py-2.5 px-2 sm:px-3.5 text-left whitespace-nowrap text-slate-500">Finish</th>
-                                                            <th className="py-2.5 px-2 sm:px-3.5 text-center whitespace-nowrap text-slate-500">Gap</th>
-                                                            <th className="py-2.5 px-2 sm:px-3.5 text-center whitespace-nowrap text-slate-500">Cases</th>
-                                                            <th className="py-2.5 px-2 sm:px-3.5 text-center whitespace-nowrap text-slate-500">Rate</th>
-                                                            <th className="py-2.5 px-2 sm:px-3.5 text-right whitespace-nowrap text-slate-500">Saved</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody className="divide-y divide-slate-800/40">
-                                                        {shiftData.history.map((entry: any, i: number) => {
-                                                            const isBest = entry.rate === shiftBestRate && typeof entry.rate === 'number';
-                                                            const isNote = entry.gap === 'NOTE' || entry.isNote;
-                                                            if (isNote) {
-                                                                return (
-                                                                    <tr key={i} className="group bg-amber-500/5 hover:bg-amber-500/10 border-l-2 border-l-amber-500 transition-colors">
-                                                                        <td className="py-2.5 px-1.5 sm:px-3 text-amber-400 font-extrabold whitespace-nowrap flex items-center gap-1.5">
-                                                                            <FileText size={11} className="shrink-0" />
-                                                                            {entry.start}
-                                                                        </td>
-                                                                        <td colSpan={5} className="py-2.5 px-1.5 sm:px-3 text-amber-300 font-bold max-w-xl break-words">
-                                                                            <div className="flex flex-col">
-                                                                                <span className="whitespace-normal leading-relaxed text-[11px] sm:text-xs font-black select-text tracking-wide">{entry.storeLabel}</span>
-                                                                                {entry.departmentName && (
-                                                                                    <span className="text-[8px] text-amber-500/60 font-black tracking-wider uppercase block mt-1">
-                                                                                        LOGGED IN: {entry.departmentName}
-                                                                                    </span>
-                                                                                )}
-                                                                            </div>
-                                                                        </td>
-                                                                        <td className="py-2.5 px-1.5 sm:px-3 text-right text-amber-500/70 font-black text-[9px] uppercase tracking-wider whitespace-nowrap">
-                                                                            NOTE
-                                                                        </td>
-                                                                    </tr>
-                                                                );
-                                                            }
-                                                            return (
-                                                                <tr key={i} className={`group hover:bg-slate-800/25 transition-colors ${isBest ? 'bg-amber-400/5' : ''}`}>
-                                                                     <td className="py-2 px-1.5 sm:px-3 text-sky-400 font-extrabold whitespace-nowrap flex items-center gap-1.5">
-                                                                        {isBest && <Zap size={10} className="text-amber-400 shrink-0" />}
-                                                                        {entry.start}
-                                                                    </td>
-                                                                    <td className="py-2 px-1.5 sm:px-3 text-sky-400 font-bold whitespace-nowrap">
-                                                                        <div className="flex flex-col">
-                                                                            <div className="flex items-center gap-1.5">
-                                                                                <span className="truncate max-w-[150px] sm:max-w-[220px]" title={entry.storeLabel || entry.departmentName || `Order #${i + 1}`}>
-                                                                                    {entry.storeLabel || entry.departmentName || `Order #${i + 1}`}
-                                                                                </span>
-                                                                                {(entry.labelImage || (entry.labelImages && entry.labelImages.length > 0)) && (
-                                                                                    <button 
-                                                                                        onClick={(e) => { 
-                                                                                            e.stopPropagation(); 
-                                                                                            const allI = [
-                                                                                                ...(entry.labelImages || []), 
-                                                                                                ...(entry.labelImage ? [entry.labelImage] : [])
-                                                                                            ].filter(Boolean);
-                                                                                            setViewingLabels(allI.length ? allI : null); 
-                                                                                        }} 
-                                                                                        className="text-emerald-400 p-0.5 hover:bg-emerald-500/10 rounded shrink-0 border border-emerald-500/20"
-                                                                                    >
-                                                                                        <Camera size={11} />
-                                                                                    </button>
-                                                                                )}
-                                                                            </div>
-                                                                            {entry.gap !== 'BREAK' && entry.gap !== 'NOTE' && !entry.isNote && (
-                                                                                <span className="text-[8px] text-slate-500 font-black tracking-wider uppercase block mt-0.5">
-                                                                                    {entry.departmentName || entry.department || 'Aisles'}
-                                                                                </span>
-                                                                            )}
-                                                                        </div>
-                                                                    </td>
-                                                                    <td className="py-2 px-1.5 sm:px-3 text-slate-400 whitespace-nowrap">{entry.finish || '--:--'}</td>
-                                                                    <td className="py-2 px-1.5 sm:px-3 text-center text-slate-400 font-mono whitespace-nowrap">{entry.gap}</td>
-                                                                    <td className="py-2 px-1.5 sm:px-3 text-center font-medium whitespace-nowrap">
-                                                                        <div className="flex flex-col items-center">
-                                                                            <span className={entry.isCaseCountModified ? 'text-fuchsia-400 font-bold' : 'text-white'}>{entry.cases}</span>
-                                                                            {entry.isCaseCountModified && <span className="text-[7px] bg-fuchsia-500/20 text-fuchsia-300 px-1 rounded border border-fuchsia-500/20 mt-0.5">MODIFIED</span>}
-                                                                        </div>
-                                                                    </td>
-                                                                    <td className={`py-2 px-1.5 sm:px-3 text-center font-black whitespace-nowrap ${isBest ? 'text-amber-400' : 'text-white'}`}>{entry.rate}</td>
-                                                                    <td className={`py-2 px-1.5 sm:px-3 text-right font-black text-[10px] sm:text-xs whitespace-nowrap ${entry.statusClass}`}>{entry.saved}</td>
-                                                                </tr>
-                                                            );
-                                                        })}
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        </div>
-
-                                        {/* Move buttons back here, just after table */}
-                                        <div className="flex gap-3 mt-6 mb-10">
-                                            <button 
-                                                className="flex-1 py-4 bg-slate-800 text-white rounded-2xl font-semibold text-sm tracking-wide hover:bg-slate-700 active:scale-[0.98] transition-all flex items-center justify-center gap-2 border border-slate-700"
-                                                onClick={() => downloadReport()}
-                                            >
-                                                <Download size={18} /> Export
-                                            </button>
-                                            <div className="flex gap-2">
-                                                <button 
-                                                    className="py-4 px-4 bg-slate-800 text-slate-400 rounded-2xl font-bold text-sm tracking-wide hover:text-white border border-slate-700"
-                                                    onClick={() => {
-                                                        const d = new Date();
-                                                        setManualClockTime(`${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`);
-                                                        setManualClockType('out');
-                                                        haptic('light');
-                                                        setShowClockInModal(true);
-                                                    }}
-                                                >
-                                                    <Clock size={20} />
-                                                </button>
-                                                <button 
-                                                    className={`flex-1 py-4 ${theme.bg} text-white rounded-2xl font-semibold text-sm tracking-wide ${theme.bgHover} active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-lg ${theme.shadow}`}
-                                                    onClick={handleEndOfDay}
-                                                >
-                                                    <CheckCircle size={18} /> Clock Out Now
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
+                    <PickingDashboardMain
+                        shiftData={shiftData}
+                        isPicking={isPicking}
+                        theme={theme}
+                        isWarning={isWarning}
+                        caseCount={caseCount}
+                        setCaseCount={setCaseCount}
+                        setIsUnlockingCaseCount={setIsUnlockingCaseCount}
+                        setUnlockPin={setUnlockPin}
+                        setUnlockError={setUnlockError}
+                        currentDept={currentDept}
+                        finishTime={finishTime}
+                        stats={stats}
+                        breakTimeDuringCurrentPick={breakTimeDuringCurrentPick}
+                        isOnBreak={isOnBreak}
+                        breakStartTime={breakStartTime}
+                        pickStartTime={pickStartTime}
+                        targetRate={targetRate}
+                        now={now}
+                        formatTime={formatTime}
+                        duoMessage={duoMessage}
+                        pendingLabelImages={pendingLabelImages}
+                        setPendingLabelImages={setPendingLabelImages}
+                        pendingStoreLabels={pendingStoreLabels}
+                        setPendingStoreLabels={setPendingStoreLabels}
+                        setViewingLabels={setViewingLabels}
+                        statsMode={statsMode}
+                        setStatsMode={setStatsMode}
+                        getDeptName={getDeptName}
+                        activeCases={activeCases}
+                        activeElapsed={activeElapsed}
+                        currentDeptStats={currentDeptStats}
+                        activeRate={activeRate}
+                        isShiftFinalized={isShiftFinalized}
+                        finalizedStats={finalizedStats}
+                        rate={rate}
+                        activeTargetRate={activeTargetRate}
+                        isRateGood={isRateGood}
+                        net={net}
+                        isNetGood={isNetGood}
+                        formatHHMM={formatHHMM}
+                        totalBreakSeconds={totalBreakSeconds}
+                        masterStart={masterStart}
+                        setManualClockType={setManualClockType}
+                        setShowClockInModal={setShowClockInModal}
+                        lane1={lane1}
+                        lane2={lane2}
+                        lane3={lane3}
+                        lane4={lane4}
+                        setLane1={setLane1}
+                        setLane2={setLane2}
+                        setLane3={setLane3}
+                        setLane4={setLane4}
+                        updateShiftData={updateShiftData}
+                        setShiftNotes={setShiftNotes}
+                        saveStandaloneNote={saveStandaloneNote}
+                        startPick={startPick}
+                        stopPick={stopPick}
+                        startPaidBreak={startPaidBreak}
+                        stopPaidBreak={stopPaidBreak}
+                        consistencyPercent={consistencyPercent}
+                        shiftBestRate={shiftBestRate}
+                        downloadReport={downloadReport}
+                        setManualClockTime={setManualClockTime}
+                        handleEndOfDay={handleEndOfDay}
+                        haptic={haptic}
+                    />
                 )}
                 
-                <AnimatePresence>
-                    {showSettings && (
-                        <motion.div 
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            className="fixed inset-0 bg-slate-950/90 z-[150] flex flex-col justify-end sm:justify-center p-4 backdrop-blur-xl"
-                        >
-                            <motion.div 
-                                initial={{ y: "100%", scale: 0.9 }}
-                                animate={{ y: 0, scale: 1 }}
-                                exit={{ y: "100%", scale: 0.9 }}
-                                className="bg-slate-900 w-full max-w-md mx-auto rounded-[24px] border border-slate-800 shadow-[0_0_50px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col max-h-[92vh]"
-                            >
-                                {/* Header */}
-                                <div className="p-3.5 pb-2.5 flex justify-between items-center border-b border-slate-800/50">
-                                    <div className="flex items-center gap-2.5">
-                                        <div className={`w-8 h-8 rounded-xl ${theme.bg} flex items-center justify-center text-white shadow-lg ${theme.shadow}`}>
-                                            <Settings size={18} className="animate-spin-slow" />
-                                        </div>
-                                        <div>
-                                            <div className="flex items-center gap-2">
-                                                <h3 className="text-base font-black text-white italic tracking-tight">ENGINE ROOM</h3>
-                                                <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700/60">
-                                                    v{APP_VERSION}
-                                                </span>
-                                            </div>
-                                            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">System Configuration</p>
-                                        </div>
-                                    </div>
-                                    <button 
-                                        onClick={() => { haptic('light'); setShowSettings(false); }} 
-                                        className="w-9 h-9 rounded-xl bg-slate-800 flex items-center justify-center text-slate-400 hover:text-white active:scale-90 transition-all border border-slate-700/50"
-                                        aria-label="Close Settings"
-                                    >
-                                        <X size={18}/>
-                                    </button>
-                                </div>
+                <SettingsModal
+                    isOpen={showSettings}
+                    onClose={() => setShowSettings(false)}
+                    theme={theme}
+                    settingsTab={settingsTab}
+                    setSettingsTab={setSettingsTab}
+                    userProfile={userProfile}
+                    shiftData={shiftData}
+                    setShiftData={setShiftData}
+                    setShowInviteModal={setShowInviteModal}
+                    isPicking={isPicking}
+                    isOnBreak={isOnBreak}
+                    zoneData={zoneData}
+                    warehouseConfig={warehouseConfig}
+                    isAisles={isAisles}
+                    handleDownloadManual={handleDownloadManual}
+                    currentDept={currentDept}
+                    isUserAdmin={isUserAdmin}
+                    handleAdminTargetRateChange={handleAdminTargetRateChange}
+                    pendingLabelImages={pendingLabelImages}
+                    setPendingLabelImages={setPendingLabelImages}
+                    pendingStoreLabels={pendingStoreLabels}
+                    setPendingStoreLabels={setPendingStoreLabels}
+                    setViewingLabels={setViewingLabels}
+                    inactivityNotifsOn={inactivityNotifsOn}
+                    setInactivityNotifsOn={setInactivityNotifsOn}
+                    wakeLockError={wakeLockError}
+                    isInIframe={isInIframe}
+                    fetchingLeaderboard={fetchingLeaderboard}
+                    fetchingSummaries={fetchingSummaries}
+                    fetchLeaderboardManual={fetchLeaderboardManual}
+                    fetchSummariesManual={fetchSummariesManual}
+                    fetchWarehouseConfigManual={fetchWarehouseConfigManual}
+                    fetchAdminSummariesManual={fetchAdminSummariesManual}
+                    setManualClockTime={setManualClockTime}
+                    setManualClockType={setManualClockType}
+                    setShowClockInModal={setShowClockInModal}
+                    handleEndOfDay={handleEndOfDay}
+                    loadDbStorageStats={loadDbStorageStats}
+                    loadingDbStats={loadingDbStats}
+                    dbStatsError={dbStatsError}
+                    dbStorageStats={dbStorageStats}
+                    mergedShiftSummaries={mergedShiftSummaries}
+                    reclaimingSpace={reclaimingSpace}
+                    setReclaimingSpace={setReclaimingSpace}
+                    spaceReclaimMsg={spaceReclaimMsg}
+                    setSpaceReclaimMsg={setSpaceReclaimMsg}
+                    stripOldImagesFromDatabase={stripOldImagesFromDatabase}
+                    purgeDatabaseOlderThan6Weeks={purgeDatabaseOlderThan6Weeks}
+                    downloadReport={downloadReport}
+                    handleEmergencySignOut={handleEmergencySignOut}
+                    setShowAbout={setShowAbout}
+                    setShowAboutDeveloper={setShowAboutDeveloper}
+                    availableUpdate={availableUpdate}
+                    updating={updating}
+                    handleUpdateApp={handleUpdateApp}
+                    checkUpdate={checkUpdate}
+                    setAvailableUpdate={setAvailableUpdate}
+                    setLastUpdateCheck={setLastUpdateCheck}
+                    setPinModal={setPinModal}
+                    setHapticsEnabled={setHapticsEnabled}
+                />
 
-                                {/* Tab Navigation */}
-                                <div className="px-3.5 py-2.5 flex gap-2 overflow-x-auto no-scrollbar border-b border-slate-800/30 bg-slate-900/50">
-                                    {[
-                                        { id: 'ops', icon: LayoutDashboard, label: 'OPS' },
-                                        { id: 'rate', icon: Trophy, label: 'GOALS' },
-                                        { id: 'ui', icon: Sliders, label: 'DEVICES' },
-                                        { id: 'data', icon: FileText, label: 'DATA' },
-                                        { id: 'vault', icon: Lock, label: 'VAULT' }
-                                    ].map(tab => {
-                                        const isActive = settingsTab === tab.id;
-                                        return (
-                                            <button
-                                                key={tab.id}
-                                                onClick={() => { haptic('light'); setSettingsTab(tab.id as any); }}
-                                                className={`flex-shrink-0 px-3.5 py-2 rounded-xl flex items-center gap-2 transition-all border ${isActive ? `${theme.bg} border-emerald-500/30 text-white shadow-[0_0_15px_rgba(16,185,129,0.1)]` : 'bg-slate-950/40 border-slate-800/60 text-slate-500 hover:text-slate-300'}`}
-                                            >
-                                                <tab.icon size={14} className={isActive ? 'text-white' : 'text-slate-500'} />
-                                                <span className="text-[9px] font-black uppercase tracking-widest leading-none">{tab.label}</span>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-
-                                <div className="flex-1 overflow-y-auto p-4 space-y-5 no-scrollbar bg-slate-900">
-                                    {settingsTab === 'vault' && (
-                                        <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
-                                            <div className="p-6 bg-slate-950 border border-slate-800 rounded-[32px]">
-                                                <h4 className="text-[12px] font-black text-white uppercase tracking-widest mb-4">Skins Vault</h4>
-                                                <div className="grid grid-cols-2 gap-4">
-                                                    {Object.entries(SKIN_REQUIREMENTS).map(([skinId, req]) => {
-                                                        const isUnlocked = (userProfile?.level || 0) >= req.level;
-                                                        return (
-                                                            <div key={skinId} className={`p-4 rounded-2xl border ${isUnlocked ? 'border-emerald-500/30 bg-emerald-950/10' : 'border-slate-800 bg-slate-950/50'}`}>
-                                                                <div className="text-[10px] font-black text-white uppercase">{req.name}</div>
-                                                                <div className={`text-[8px] font-bold mt-1 ${isUnlocked ? 'text-emerald-500' : 'text-slate-500'}`}>{isUnlocked ? 'UNLOCKED' : req.desc}</div>
-                                                                <button
-                                                                    disabled={!isUnlocked}
-                                                                    onClick={() => {
-                                                                        setShiftData({...shiftData, selectedSkin: skinId});
-                                                                        haptic('medium');
-                                                                    }}
-                                                                    className={`mt-3 w-full py-2 rounded-lg text-[9px] font-black uppercase ${isUnlocked && (shiftData.selectedSkin || 'classic') === skinId ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-400'} ${!isUnlocked && 'opacity-50 cursor-not-allowed'}`}
-                                                                >
-                                                                    {isUnlocked ? ((shiftData.selectedSkin || 'classic') === skinId ? 'SELECTED' : 'SELECT') : 'LOCKED'}
-                                                                </button>
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </div>
-                                        </motion.div>
-                                    )}
-
-                                    {settingsTab === 'ops' && (
-                                        <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className="space-y-8">
-                                            {/* Invite Colleague Quick Banner */}
-                                            <div 
-                                                onClick={() => { haptic('medium'); setShowInviteModal(true); }}
-                                                className="p-4 rounded-3xl bg-gradient-to-r from-sky-950/60 via-slate-900 to-emerald-950/60 border border-sky-500/30 flex items-center justify-between cursor-pointer hover:border-sky-400/50 transition-all active:scale-98 shadow-lg shadow-sky-500/5 group"
-                                            >
-                                                <div className="flex items-center gap-3.5">
-                                                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-sky-500 to-emerald-500 flex items-center justify-center text-white shadow-md shadow-sky-500/20 group-hover:scale-105 transition-transform">
-                                                        <UserPlus size={20} />
-                                                    </div>
-                                                    <div>
-                                                        <h4 className="text-xs font-black text-white uppercase tracking-tight flex items-center gap-1.5">
-                                                            Invite Colleague
-                                                            <Sparkles size={12} className="text-emerald-400" />
-                                                        </h4>
-                                                        <p className="text-[10px] text-slate-400 font-medium">Generate instant QR code & share link</p>
-                                                    </div>
-                                                </div>
-                                                <ChevronRight size={18} className="text-slate-500 group-hover:text-sky-400 group-hover:translate-x-0.5 transition-all" />
-                                            </div>
-
-                                            {/* Zone Select */}
-                                            <div className="space-y-4">
-                                                <div className="flex items-center justify-between px-1">
-                                                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Operational Zone</label>
-                                                    <span className="px-2 py-0.5 rounded text-[8px] font-black bg-slate-950 border border-slate-800 text-slate-400">HARDWARE LOCK: OFF</span>
-                                                </div>
-                                                <div className="grid grid-cols-3 gap-3">
-                                                    {Object.entries(DEPARTMENTS).map(([key, z]) => (
-                                                        <button
-                                                            key={key}
-                                                            onClick={() => {
-                                                                const newZone = key as keyof typeof DEPARTMENTS;
-                                                                const firstDept = Object.values(DEPARTMENTS[newZone].depts)[0];
-                                                                const firstSub = Object.keys(firstDept.sub)[0];
-                                                                haptic('medium'); 
-                                                                setShiftData({...shiftData, zone: newZone, department: firstSub, customTargetRate: null}); 
-                                                            }}
-                                                            disabled={isPicking || isOnBreak}
-                                                            className={`h-24 rounded-[28px] flex flex-col items-center justify-center gap-2 transition-all border-2 ${shiftData.zone === key ? `${theme.border} bg-slate-800/80 shadow-[0_8px_20px_-5px_rgba(0,0,0,0.5)]` : 'bg-slate-950/50 border-slate-800/50 text-slate-700 hover:border-slate-700'} ${(isPicking || isOnBreak) ? 'opacity-40 cursor-not-allowed grayscale' : ''}`}
-                                                        >
-                                                            <div className={`p-2 rounded-xl ${shiftData.zone === key ? 'bg-white/10' : 'bg-slate-900/50'}`}>
-                                                                {key === 'AMBIENT' && <Coffee size={20} className={shiftData.zone === key ? theme.text : 'text-slate-600'} />}
-                                                                {key === 'CHILLER' && <Zap size={20} className={shiftData.zone === key ? theme.text : 'text-slate-600'} />}
-                                                                {key === 'FREEZER' && <RefreshCcw size={20} className={shiftData.zone === key ? theme.text : 'text-slate-600'} />}
-                                                            </div>
-                                                            <span className={`text-[10px] font-black uppercase tracking-widest ${shiftData.zone === key ? 'text-white' : 'text-slate-600'}`}>{z.name.split(' ')[0]}</span>
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </div>
-
-                                            {/* Store Label Input */}
-                                            <div className="space-y-4">
-                                                <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Store Identity Label</label>
-                                                <div className="relative group">
-                                                    <div className="absolute inset-y-0 left-4 flex items-center text-slate-600 group-focus-within:text-sky-500 transition-colors">
-                                                        <Hash size={18} />
-                                                    </div>
-                                                    <input 
-                                                        type="text" 
-                                                        value={shiftData.storeLabel || ''} 
-                                                        onChange={(e) => setShiftData({...shiftData, storeLabel: e.target.value.toUpperCase()})}
-                                                        className="w-full bg-slate-950 border-2 border-slate-800/80 py-5 pl-12 pr-4 rounded-2xl text-white font-mono uppercase tracking-[0.2em] focus:ring-1 focus:ring-sky-500/50 focus:border-sky-500/50 outline-none transition-all placeholder-slate-800"
-                                                        placeholder="UNASSIGNED (e.g. C293)"
-                                                    />
-                                                </div>
-                                            </div>
-
-                                            {/* Dept Selection Grouped */}
-                                            <div className="space-y-6">
-                                                <div className="flex items-center gap-3 px-1">
-                                                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
-                                                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Assignment Selection</label>
-                                                </div>
-                                                {Object.entries(zoneData.depts).map(([deptKey, dept]) => (
-                                                    <div key={deptKey} className="space-y-3 bg-slate-950/30 p-4 rounded-3xl border border-slate-800/40">
-                                                        <div className="flex items-center gap-3 mb-1">
-                                                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic">{dept.name}</span>
-                                                            <div className="h-[1px] flex-1 bg-gradient-to-r from-slate-800/80 to-transparent"></div>
-                                                        </div>
-                                                        <div className="grid grid-cols-2 gap-2.5">
-                                                            {Object.entries(dept.sub).map(([key, d]: [string, any]) => {
-                                                                const targetVal = warehouseConfig?.customDeptTargets?.[key] !== undefined 
-                                                                    ? warehouseConfig.customDeptTargets[key] 
-                                                                    : d.target;
-                                                                return (
-                                                                    <button
-                                                                        key={key}
-                                                                        onClick={() => {
-                                                                            haptic('medium'); 
-                                                                            setShiftData({...shiftData, department: key, customTargetRate: null}); 
-                                                                        }}
-                                                                        disabled={isPicking || isOnBreak}
-                                                                        className={`py-3 px-3 rounded-2xl text-[9px] font-black uppercase tracking-wider transition-all border-2 flex items-center justify-between gap-1.5 ${shiftData.department === key ? `${theme.border} bg-slate-800 text-white shadow-lg` : 'bg-slate-900/60 border-slate-800/60 text-slate-500 hover:border-slate-700'} ${(isPicking || isOnBreak) ? 'opacity-40 cursor-not-allowed' : ''}`}
-                                                                    >
-                                                                        <span className="text-left leading-tight break-words flex-1 py-0.5">{d.name}</span>
-                                                                        <span className={`text-[8px] font-mono px-1.5 py-0.5 rounded shrink-0 ${shiftData.department === key ? 'bg-white/10 text-white' : 'bg-slate-800 text-slate-400'}`}>{targetVal}</span>
-                                                                    </button>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                                <div className="mt-4 p-5 bg-slate-950/50 rounded-[32px] border border-slate-800/80 overflow-hidden relative">
-                                                    <div className="absolute -top-10 -right-10 w-24 h-24 bg-sky-500/5 rounded-full blur-2xl"></div>
-                                                    {(isPicking || isOnBreak) && (
-                                                        <div className="mb-4 p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl flex items-center gap-3">
-                                                            <AlertCircle size={18} className="text-rose-500 shrink-0" />
-                                                            <span className="text-[10px] font-black text-rose-500 uppercase tracking-tight leading-tight">ACTIVE CYCLE DETECTED: Configuration lock is currently engaged.</span>
-                                                        </div>
-                                                    )}
-                                                    <div className="flex items-center gap-3 mb-2.5">
-                                                        <div className={`w-8 h-8 rounded-xl ${theme.bg} flex items-center justify-center text-white`}>
-                                                            <Sparkles size={16} />
-                                                        </div>
-                                                        <span className="text-[11px] font-black text-slate-200 uppercase tracking-widest">Logic: {isAisles ? 'Aisles Linear' : '3-Min Offset'}</span>
-                                                    </div>
-                                                    <p className="text-[10px] text-slate-500 leading-relaxed font-bold uppercase tracking-tight pl-11">
-                                                        {isAisles 
-                                                            ? "45m dynamic buffering distributed across shift rotation."
-                                                            : "180s gap insulation applied to inter-order transitions."}
-                                                    </p>
-                                                </div>
-
-                                                {/* Manual Link in Settings */}
-                                                <div className="pt-2">
-                                                    <button 
-                                                        onClick={handleDownloadManual}
-                                                        className="w-full p-5 bg-slate-950 border-2 border-slate-800/50 rounded-[32px] flex items-center justify-between group hover:border-emerald-500/30 transition-all shadow-inner"
-                                                    >
-                                                        <div className="flex items-center gap-4">
-                                                            <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 group-hover:text-emerald-400 transition-all group-hover:scale-110">
-                                                                <BookOpen size={22} />
-                                                            </div>
-                                                            <div className="text-left">
-                                                                <h4 className="text-sm font-black text-white italic tracking-tight">OPS COMPLIANCE MANUAL</h4>
-                                                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">System Documentation / PDF</p>
-                                                            </div>
-                                                        </div>
-                                                        <div className="w-10 h-10 rounded-full bg-slate-900 flex items-center justify-center text-slate-700 group-hover:text-white transition-colors border border-slate-800">
-                                                            <Download size={16} />
-                                                        </div>
-                                                    </button>
-                                                </div>
-                                            </motion.div>
-                                        )}
-
-                                    {settingsTab === 'rate' && (
-                                        <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className="space-y-8">
-                                            <div className="space-y-5">
-                                                <div className="flex justify-between items-end px-1">
-                                                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Manual Rate Override</label>
-                                                    <span className="text-[9px] font-black text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">TARGET: {currentDept?.target || 200}</span>
-                                                </div>
-                                                <div className="relative group">
-                                                    <input 
-                                                        type="number" 
-                                                        inputMode="numeric"
-                                                        className={`w-full bg-slate-950 border-2 border-slate-800 text-white p-7 rounded-[32px] text-5xl font-black italic outline-none ${theme.borderFocus} pr-24 transition-all placeholder-slate-900 shadow-inner group-focus-within:shadow-[0_0_30px_rgba(0,0,0,0.5)]`}
-                                                        value={shiftData.customTargetRate || ''}
-                                                        onChange={e => {
-                                                            const val = parseInt(e.target.value);
-                                                            const targetVal = isNaN(val) ? null : val;
-                                                            setShiftData({...shiftData, customTargetRate: targetVal});
-                                                            if (isUserAdmin()) {
-                                                                handleAdminTargetRateChange(targetVal);
-                                                            }
-                                                        }}
-                                                        placeholder={currentDept?.target.toString()}
-                                                    />
-                                                    <div className="absolute right-8 top-1/2 -translate-y-1/2 font-black text-slate-700 italic text-xl tracking-widest">PH</div>
-                                                </div>
-                                                <div className="grid grid-cols-4 gap-3">
-                                                    {[-20, -10, +10, +20].map(v => (
-                                                        <button 
-                                                            key={v}
-                                                            onClick={() => {
-                                                                const curr = shiftData.customTargetRate || currentDept?.target || 200;
-                                                                const nextVal = Math.max(10, curr + v);
-                                                                setShiftData({...shiftData, customTargetRate: nextVal});
-                                                                if (isUserAdmin()) {
-                                                                    handleAdminTargetRateChange(nextVal);
-                                                                }
-                                                                haptic('light');
-                                                            }}
-                                                            className="py-3.5 bg-slate-950 rounded-2xl text-[11px] font-black text-slate-500 hover:text-white border-2 border-slate-800/80 hover:border-slate-600 transition-all active:scale-95 shadow-sm"
-                                                        >
-                                                            {v > 0 ? `+${v}` : v}
-                                                        </button>
-                                                    ))}
-                                                </div>
-
-                                                {/* Pre-Pick Label Grid for idle state */}
-                                                {!isPicking && (pendingLabelImages.length > 0 || pendingStoreLabels.length > 0) && (
-                                                    <div className="bg-slate-950 border-2 border-slate-800/80 p-5 rounded-[32px] shadow-inner relative overflow-hidden">
-                                                        <div className="absolute -top-10 -right-10 w-20 h-20 bg-amber-500/5 blur-2xl rounded-full"></div>
-                                                        <div className="flex justify-between items-center mb-4 px-1">
-                                                            <div className="flex items-center gap-2">
-                                                                <Camera size={14} className="text-amber-500" />
-                                                                <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Manifest Buffer ({pendingLabelImages.length}/4)</span>
-                                                            </div>
-                                                            <button 
-                                                                onClick={() => { setPendingLabelImages([]); setPendingStoreLabels([]); haptic('heavy'); }} 
-                                                                className="text-[9px] font-black text-rose-500 uppercase tracking-[0.2em] hover:text-rose-400 transition-colors bg-rose-500/10 px-2.5 py-1 rounded-xl border border-rose-500/20"
-                                                            >
-                                                                Purge Buffer
-                                                            </button>
-                                                        </div>
-                                                        <div className="grid grid-cols-2 gap-3">
-                                                            {Array.from({ length: Math.max(pendingLabelImages.length, pendingStoreLabels.length) }).map((_, index) => {
-                                                                const img = pendingLabelImages[index];
-                                                                const label = pendingStoreLabels[index] || "NULL_LABEL";
-                                                                return (
-                                                                    <div key={index} className="bg-slate-900 border border-slate-800/80 rounded-2xl p-2 flex items-center justify-between gap-3 relative group overflow-hidden">
-                                                                        <div className="flex items-center gap-2.5 overflow-hidden min-w-0">
-                                                                            {img ? (
-                                                                                <div 
-                                                                                    className="w-9 h-9 rounded-xl overflow-hidden shrink-0 border border-slate-700 cursor-pointer shadow-md active:scale-90 transition-transform" 
-                                                                                    onClick={() => setViewingLabels([img])}
-                                                                                >
-                                                                                    <img src={img} className="w-full h-full object-cover" />
-                                                                                </div>
-                                                                            ) : <div className="w-9 h-9 rounded-xl bg-slate-950 shrink-0 border-2 border-dashed border-slate-800 flex items-center justify-center text-slate-800" />}
-                                                                            <span className="text-[11px] text-white font-mono truncate font-black tracking-tight">{label}</span>
-                                                                        </div>
-                                                                        <button 
-                                                                            onClick={() => { setPendingLabelImages(prev => prev.filter((_, i) => i !== index)); setPendingStoreLabels(prev => prev.filter((_, i) => i !== index)); haptic('light'); }} 
-                                                                            className="text-slate-700 hover:text-rose-500 transition-colors p-1"
-                                                                        >
-                                                                            <X size={16} />
-                                                                        </button>
-                                                                    </div>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    </div>
-                                                )}
-
-                                                {/* Department Reference Table */}
-                                                <div className="bg-slate-950 border-2 border-slate-800 rounded-[32px] p-6 shadow-inner">
-                                                    <div className="flex items-center gap-3 mb-5 border-b border-slate-800 pb-4">
-                                                        <div className={`w-9 h-9 rounded-xl ${theme.bg} flex items-center justify-center text-white shadow-md`}>
-                                                            <Trophy size={18} />
-                                                        </div>
-                                                        <h5 className="text-[11px] font-black text-white uppercase tracking-[0.2em] italic">Department Benchmarks</h5>
-                                                    </div>
-                                                    <div className="space-y-6">
-                                                        {Object.values(DEPARTMENTS).map(zone => (
-                                                            <div key={zone.name} className="space-y-3">
-                                                                <div className="flex items-center gap-3">
-                                                                    <div className="h-[2px] w-4 bg-emerald-500/50"></div>
-                                                                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">{zone.name}</div>
-                                                                </div>
-                                                                {Object.values(zone.depts).map(dept => (
-                                                                    <div key={dept.name} className="space-y-2 pl-3">
-                                                                        <div className="text-[9px] font-black text-slate-600 uppercase tracking-widest">{dept.name}</div>
-                                                                        <div className="grid grid-cols-1 gap-1.5">
-                                                                            {Object.entries(dept.sub).map(([key, d]: [string, any]) => {
-                                                                                const targetVal = warehouseConfig?.customDeptTargets?.[key] !== undefined 
-                                                                                    ? warehouseConfig.customDeptTargets[key] 
-                                                                                    : d.target;
-                                                                                return (
-                                                                                    <div key={key} className="flex justify-between items-center bg-slate-900 px-4 py-2.5 rounded-2xl border border-slate-800/60 hover:border-slate-700 transition-colors">
-                                                                                        <span className="text-[11px] text-slate-300 font-black tracking-tight">{d.name}</span>
-                                                                                        <div className="flex items-center gap-3">
-                                                                                            {(key === 'aisles' || key.startsWith('aisle')) && <span className="text-[8px] bg-sky-500/10 text-sky-400 px-2 py-0.5 rounded-lg border border-sky-400/20 font-black">+45M BUF</span>}
-                                                                                            <span className="text-[11px] text-white font-black italic tracking-widest">{targetVal} PH</span>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                );
-                                                                            })}
-                                                                        </div>
-                                                                    </div>
-                                                                ))}
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                </div>
-
-                                                {shiftData.customTargetRate && (
-                                                    <button 
-                                                        onClick={() => {
-                                                            setShiftData({...shiftData, customTargetRate: null});
-                                                            if (isUserAdmin()) {
-                                                                handleAdminTargetRateChange(null);
-                                                            }
-                                                        }}
-                                                        className="w-full py-5 bg-slate-950 border-2 border-slate-800/80 rounded-[28px] text-[11px] font-black uppercase text-slate-500 flex items-center justify-center gap-3 hover:text-white hover:border-emerald-500/40 transition-all shadow-sm"
-                                                    >
-                                                        <RotateCcw size={14} className="animate-spin-slow" /> De-activate Override
-                                                    </button>
-                                                )}
-                                            </div>
-                                        </motion.div>
-                                    )}
-
-                                    {settingsTab === 'ui' && (
-                                        <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className="space-y-8">
-                                            {/* Hardware Feedback & Diagnostics Panel */}
-                                            <div className="p-4 bg-slate-950/60 rounded-3xl border border-slate-800 space-y-4">
-                                                <div className="flex items-center justify-between">
-                                                    <div className="flex items-center gap-2">
-                                                        <Activity size={16} className="text-emerald-400" />
-                                                        <h4 className="text-xs font-black text-white uppercase tracking-wider">Haptic Feedback & Sound Test</h4>
-                                                    </div>
-                                                    <span className={`text-[9px] font-mono px-2 py-0.5 rounded-md font-bold uppercase ${isVibrationSupported() ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'}`}>
-                                                        {isVibrationSupported() ? 'Vibration API Ready' : 'Web Audio Emulation'}
-                                                    </span>
-                                                </div>
-                                                <p className="text-[10px] text-slate-400 leading-relaxed">
-                                                    Test physical vibrations and audio chimes below. Ensure phone silent switch is OFF and system touch feedback is enabled in phone settings.
-                                                </p>
-                                                <div className="grid grid-cols-3 gap-2">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => {
-                                                            deviceHapticService('light');
-                                                            playGentleBeep();
-                                                        }}
-                                                        className="py-3 px-2 bg-slate-900 hover:bg-slate-850 active:scale-95 text-slate-200 border border-slate-800 hover:border-slate-700 rounded-xl text-[10px] font-black uppercase tracking-wider flex flex-col items-center gap-1 transition-all"
-                                                    >
-                                                        <Volume2 size={14} className="text-sky-400" />
-                                                        <span>Light Tap</span>
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => {
-                                                            deviceHapticService('medium');
-                                                            playAlertSound('success');
-                                                        }}
-                                                        className="py-3 px-2 bg-slate-900 hover:bg-slate-850 active:scale-95 text-emerald-300 border border-slate-800 hover:border-emerald-500/30 rounded-xl text-[10px] font-black uppercase tracking-wider flex flex-col items-center gap-1 transition-all"
-                                                    >
-                                                        <Volume2 size={14} className="text-emerald-400" />
-                                                        <span>Medium Buzz</span>
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => {
-                                                            deviceHapticService('heavy');
-                                                            playVictorySound();
-                                                        }}
-                                                        className="py-3 px-2 bg-slate-900 hover:bg-slate-850 active:scale-95 text-amber-300 border border-slate-800 hover:border-amber-500/30 rounded-xl text-[10px] font-black uppercase tracking-wider flex flex-col items-center gap-1 transition-all"
-                                                    >
-                                                        <Volume2 size={14} className="text-amber-400" />
-                                                        <span>Heavy & Fanfare</span>
-                                                    </button>
-                                                </div>
-                                            </div>
-
-                                            <div className="space-y-5">
-                                                <div className="flex items-center justify-between px-1">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="p-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20">
-                                                            <Bell size={14} className="text-indigo-400" />
-                                                        </div>
-                                                        <div>
-                                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">3-Day Inactivity Reminder</label>
-                                                            <p className="text-[9px] text-slate-500 font-medium">Sends an owl mascot alert if you don't open PickApp for 3 days.</p>
-                                                        </div>
-                                                    </div>
-                                                    <span className={`text-[8px] font-mono px-1.5 py-0.5 rounded font-bold uppercase ${isNotificationSupported() ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' : 'bg-slate-800 text-slate-500'}`}>
-                                                        {isNotificationSupported() ? 'Supported' : 'Not Supported'}
-                                                    </span>
-                                                </div>
-                                                
-                                                <div className="grid grid-cols-2 gap-3 p-2 bg-slate-950 rounded-[32px] border-2 border-slate-800 shadow-inner">
-                                                    <button 
-                                                        className={`py-5 rounded-[24px] font-black text-[12px] uppercase transition-all tracking-[0.2em] relative overflow-hidden ${inactivityNotifsOn ? `${theme.bg} text-white shadow-xl` : 'text-slate-700 hover:text-slate-500'}`}
-                                                        onClick={async () => {
-                                                            const success = await setInactivityNotifsEnabled(true);
-                                                            setInactivityNotifsOn(success);
-                                                            if (success) {
-                                                                deviceHapticService('medium');
-                                                            } else {
-                                                                deviceHapticService('light');
-                                                            }
-                                                        }}
-                                                    >
-                                                        {inactivityNotifsOn && <div className="absolute inset-0 bg-white/10 animate-pulse"></div>}
-                                                        NOTIFY_ON
-                                                    </button>
-                                                    <button 
-                                                        className={`py-5 rounded-[24px] font-black text-[12px] uppercase transition-all tracking-[0.2em] ${!inactivityNotifsOn ? `bg-slate-800 text-white border border-slate-700 shadow-lg` : 'text-slate-700 hover:text-slate-500'}`}
-                                                        onClick={async () => {
-                                                            await setInactivityNotifsEnabled(false);
-                                                            setInactivityNotifsOn(false);
-                                                            deviceHapticService('light');
-                                                        }}
-                                                    >
-                                                        DISABLED
-                                                    </button>
-                                                </div>
-
-                                                {inactivityNotifsOn && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => {
-                                                            sendInactivityNotification("🦉 Preview Test: This is how your 3-day inactivity reminder will appear!");
-                                                            deviceHapticService('medium');
-                                                        }}
-                                                        className="w-full py-3 bg-indigo-950/40 hover:bg-indigo-900/40 text-indigo-300 border border-indigo-500/30 rounded-2xl text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-95"
-                                                    >
-                                                        <Bell size={12} className="text-indigo-400" />
-                                                        <span>Send Test Inactivity Notification</span>
-                                                    </button>
-                                                )}
-                                            </div>
-
-                                            <div className="space-y-5">
-                                                <div className="flex items-center gap-3 px-1">
-                                                    <div className="p-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
-                                                        <Activity size={14} className="text-emerald-500" />
-                                                    </div>
-                                                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Haptic Engine Status</label>
-                                                </div>
-                                                <div className="grid grid-cols-2 gap-3 p-2 bg-slate-950 rounded-[32px] border-2 border-slate-800 shadow-inner">
-                                                    <button 
-                                                        className={`py-5 rounded-[24px] font-black text-[12px] uppercase transition-all tracking-[0.2em] relative overflow-hidden ${shiftData.haptic === 'on' ? `${theme.bg} text-white shadow-xl` : 'text-slate-700 hover:text-slate-500'}`}
-                                                        onClick={() => { setShiftData({...shiftData, haptic: 'on'}); setHapticsEnabled(true); deviceHapticService('heavy'); }}
-                                                    >
-                                                        {shiftData.haptic === 'on' && <div className="absolute inset-0 bg-white/10 animate-pulse"></div>}
-                                                        VIBRO_ON
-                                                    </button>
-                                                    <button 
-                                                        className={`py-5 rounded-[24px] font-black text-[12px] uppercase transition-all tracking-[0.2em] ${shiftData.haptic === 'off' ? `bg-slate-800 text-white border border-slate-700 shadow-lg` : 'text-slate-700 hover:text-slate-500'}`}
-                                                        onClick={() => { setShiftData({...shiftData, haptic: 'off'}); setHapticsEnabled(false); deviceHapticService('light'); }}
-                                                    >
-                                                        MUTED
-                                                    </button>
-                                                </div>
-                                            </div>
-
-                                            <div className="space-y-5">
-                                                <div className="flex items-center gap-3 px-1">
-                                                    <div className="p-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20">
-                                                        <Volume2 size={14} className="text-sky-500" />
-                                                    </div>
-                                                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Headset Audio Synths</label>
-                                                </div>
-                                                <button 
-                                                    className={`w-full py-6 rounded-[32px] font-black text-[12px] uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-4 border-2 ${shiftData.voiceEnabled ? `bg-sky-500 text-white border-transparent shadow-[0_0_25px_rgba(14,165,233,0.3)]` : 'bg-slate-950 text-slate-700 border-slate-800/80 shadow-inner'}`}
-                                                    onClick={() => { setShiftData({...shiftData, voiceEnabled: !shiftData.voiceEnabled}); haptic('medium'); }}
-                                                >
-                                                    <div className={`p-2 rounded-xl ${shiftData.voiceEnabled ? 'bg-white/20' : 'bg-slate-900'}`}>
-                                                        <Mic size={20} className={shiftData.voiceEnabled ? "fill-white" : ""} />
-                                                    </div>
-                                                    {shiftData.voiceEnabled ? 'ANNOUNCEMENTS_ACTIVE' : 'ACTIVATE_AUDIO_SYNS'}
-                                                </button>
-                                                <div className="px-6 py-3 bg-slate-950/40 rounded-2xl border border-dashed border-slate-800">
-                                                    <p className="text-[10px] text-slate-600 font-bold uppercase tracking-tight text-center leading-relaxed">
-                                                        "Strict adherence to privacy protocols: Real-time audio rendering is output-only. Integrated receiver is structurally locked."
-                                                    </p>
-                                                </div>
-                                            </div>
-
-                                            <div className="space-y-5">
-                                                <div className="flex items-center gap-3 px-1">
-                                                    <div className="p-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                                                        <Power size={14} className="text-amber-500" />
-                                                    </div>
-                                                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">System Power State</label>
-                                                </div>
-                                                <button 
-                                                    className={`w-full py-6 rounded-[32px] font-black text-[12px] uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-4 border-2 ${shiftData.wakeLock ? `bg-amber-600 text-white border-transparent shadow-[0_0_25px_rgba(217,119,6,0.3)]` : 'bg-slate-950 text-slate-700 border-slate-800/80 shadow-inner'}`}
-                                                    onClick={() => { setShiftData({...shiftData, wakeLock: !shiftData.wakeLock}); haptic('medium'); }}
-                                                >
-                                                    <div className={`p-2 rounded-xl ${shiftData.wakeLock ? 'bg-white/20' : 'bg-slate-900'}`}>
-                                                        <Zap size={20} className={shiftData.wakeLock ? "fill-white animate-pulse" : ""} />
-                                                    </div>
-                                                    {shiftData.wakeLock ? 'WAKE_LOCK_ENGAGED' : 'ENGAGE_WAKE_LOCK'}
-                                                </button>
-                                                {wakeLockError && (
-                                                    <div className="space-y-4">
-                                                        <div className="bg-rose-500/10 border-2 border-rose-500/20 rounded-[28px] p-5 text-center">
-                                                            <p className="text-[10px] text-rose-500 font-black uppercase tracking-[0.2em] leading-relaxed mb-4">
-                                                                CRITICAL_IO_BLOCK: {wakeLockError.includes('permissions policy') 
-                                                                    ? "Browser security sandbox prevents power-state modification inside iframe container." 
-                                                                    : `System Exception: ${wakeLockError}`}
-                                                            </p>
-                                                            <button 
-                                                                onClick={() => window.open(window.location.href, '_blank')}
-                                                                className="w-full py-4 bg-rose-500 text-white rounded-2xl font-black text-[11px] uppercase tracking-[0.2em] flex items-center justify-center gap-3 hover:bg-rose-400 transition-colors shadow-lg shadow-rose-500/20"
-                                                            >
-                                                                <ExternalLink size={16} /> Bypass Sandbox
-                                                            </button>
-                                                        </div>
-                                                        <p className="text-[9px] text-slate-700 text-center font-black uppercase tracking-widest italic">Switch to Direct Host for unrestricted hardware access.</p>
-                                                    </div>
-                                                )}
-                                                {!wakeLockError && isInIframe && (
-                                                    <div className="pt-2">
-                                                        <button 
-                                                            onClick={() => window.open(window.location.href, '_blank')}
-                                                            className="w-full py-4 border-2 border-slate-800/80 bg-slate-950 rounded-2xl font-black text-[11px] text-slate-500 uppercase tracking-[0.2em] flex items-center justify-center gap-3 hover:bg-slate-800 transition-all shadow-sm"
-                                                        >
-                                                            <ExternalLink size={14} /> Standalone View
-                                                        </button>
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            {/* Build Version Info */}
-                                            <div className="pt-6 border-t border-slate-800 flex justify-between items-center text-[10px] font-black text-slate-700 uppercase tracking-[0.3em]">
-                                                <div className="flex items-center gap-2">
-                                                    <div className="w-2 h-2 rounded-full bg-emerald-500/30"></div>
-                                                    <span>Core_OS_v{APP_VERSION}</span>
-                                                </div>
-                                                <button 
-                                                    onClick={() => window.location.reload()}
-                                                    className="flex items-center gap-2 hover:text-sky-500 transition-colors group"
-                                                >
-                                                    <RefreshCw size={10} className="group-hover:rotate-180 transition-transform duration-500" />
-                                                    REBOOT_KERNEL
-                                                </button>
-                                            </div>
-                                        </motion.div>
-                                    )}
-
-                                    {settingsTab === 'data' && (
-                                        <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
-                                            {/* GLOBAL FETCH ENGINE - QUOTA GUARDIAN INITIATIVE */}
-                                            <div className="p-5 bg-slate-950 border-2 border-emerald-500/20 rounded-[32px] shadow-2xl relative overflow-hidden group">
-                                                <div className="absolute inset-0 bg-emerald-500/[0.02] pointer-events-none group-hover:bg-emerald-500/[0.05] transition-colors"></div>
-                                                <div className="flex items-center justify-between mb-4">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="p-2.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 shadow-lg shadow-emerald-500/5">
-                                                            <RefreshCcw size={18} className={`text-emerald-500 ${fetchingLeaderboard || fetchingSummaries ? 'animate-spin' : ''}`} />
-                                                        </div>
-                                                        <div>
-                                                            <h4 className="text-[12px] font-black text-white uppercase tracking-widest">Global Application Sync</h4>
-                                                            <p className="text-[8px] text-emerald-500/60 font-black uppercase tracking-[0.2em] mt-0.5 flex items-center gap-1.5">
-                                                                <Shield size={10} /> QUOTA_GUARDIAN_READY
-                                                            </p>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tight leading-relaxed mb-5 px-1 italic">
-                                                    "All background telemetry is structurally disabled. Manual synchronization is required to propagate cloud artifacts to local cache."
-                                                </p>
-                                                <button 
-                                                    onClick={() => {
-                                                        haptic('heavy');
-                                                        fetchLeaderboardManual(true);
-                                                        fetchSummariesManual(true);
-                                                        fetchWarehouseConfigManual(true);
-                                                        if (isUserAdmin()) fetchAdminSummariesManual(true);
-                                                    }}
-                                                    disabled={fetchingLeaderboard || fetchingSummaries}
-                                                    className={`w-full py-5 rounded-[24px] font-black text-[12px] uppercase tracking-[0.3em] transition-all flex items-center justify-center gap-4 border-2 shadow-2xl ${fetchingLeaderboard || fetchingSummaries ? 'bg-slate-900 text-slate-700 border-slate-800' : 'bg-emerald-500 text-white border-transparent shadow-emerald-500/20'}`}
-                                                >
-                                                    {fetchingLeaderboard || fetchingSummaries ? (
-                                                        <>ENGINE_SYNCHRONIZING...</>
-                                                    ) : (
-                                                        <>FORCE_GLOBAL_SYNC</>
-                                                    )}
-                                                </button>
-                                            </div>
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <button 
-                                                    className="py-3.5 bg-slate-950 border border-slate-800 rounded-xl font-black text-[11px] uppercase tracking-[0.2em] text-slate-500 hover:text-white hover:border-slate-600 transition-all active:scale-95 flex items-center justify-center gap-2.5 shadow-sm"
-                                                    onClick={() => {
-                                                        const d = new Date();
-                                                        setManualClockTime(`${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`);
-                                                        setManualClockType('out');
-                                                        haptic('light');
-                                                        setShowClockInModal(true);
-                                                        setShowSettings(false);
-                                                    }}
-                                                >
-                                                    <div className="p-1 bg-slate-900 rounded-md">
-                                                        <Clock size={14} />
-                                                    </div>
-                                                    MANUAL_LOG
-                                                </button>
-                                                <button 
-                                                    className={`py-3.5 ${theme.bg} text-white rounded-xl font-black text-[11px] uppercase tracking-[0.2em] shadow-xl ${theme.shadow} active:scale-95 transition-all flex items-center justify-center gap-2.5`}
-                                                    onClick={() => {
-                                                        haptic('medium');
-                                                        setShowSettings(false);
-                                                        handleEndOfDay();
-                                                    }}
-                                                >
-                                                    <LogOut size={14} /> END_SHIFT
-                                                </button>
-                                            </div>
-
-                                            {/* DATABASE STORAGE STATISTICS & CAPACITY MANAGER */}
-                                            <div className="bg-slate-950 border border-slate-800/80 rounded-2xl p-4 space-y-4 shadow-inner relative overflow-hidden">
-                                                <div className="absolute top-0 right-0 w-32 h-32 bg-sky-500/5 blur-3xl rounded-full"></div>
-                                                <div className="flex items-center justify-between border-b border-slate-800/60 pb-2.5">
-                                                    <div className="flex items-center gap-2.5">
-                                                        <div className="p-1.5 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-500 shadow-md">
-                                                            <Database size={16} />
-                                                        </div>
-                                                        <div>
-                                                            <h4 className="text-[11px] font-black text-white uppercase tracking-widest">Storage Status</h4>
-                                                            <p className="text-[8px] text-slate-600 font-black uppercase tracking-[0.2em] mt-0.5">TELEMETRY_REALTIME</p>
-                                                        </div>
-                                                    </div>
-                                                    <button 
-                                                        onClick={() => { haptic('light'); loadDbStorageStats(); }}
-                                                        disabled={loadingDbStats}
-                                                        className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700/50 text-[9px] text-slate-400 hover:text-white rounded-xl font-black uppercase tracking-widest flex items-center gap-2 transition-all active:scale-90 shadow-sm"
-                                                    >
-                                                        <RefreshCw size={12} className={loadingDbStats ? "animate-spin" : ""} />
-                                                        RESCAN_I/O
-                                                    </button>
-                                                </div>
-
-                                                {loadingDbStats ? (
-                                                    <div className="py-12 flex flex-col items-center justify-center gap-4">
-                                                        <div className="relative">
-                                                            <div className="w-16 h-16 rounded-full border-4 border-sky-500/10 border-t-sky-500 animate-spin"></div>
-                                                            <div className="absolute inset-0 flex items-center justify-center">
-                                                                <Database size={24} className="text-sky-500 animate-pulse" />
-                                                            </div>
-                                                        </div>
-                                                        <span className="text-[10px] font-black text-slate-600 uppercase tracking-[0.4em] animate-pulse">Analyzing Cloud Quotas...</span>
-                                                    </div>
-                                                ) : dbStatsError ? (
-                                                    <div className="p-6 bg-rose-500/10 border-2 border-rose-500/20 rounded-3xl text-center flex flex-col items-center gap-3">
-                                                        <XOctagon size={32} className="text-rose-500" />
-                                                        <span className="text-[11px] font-black text-rose-400 uppercase tracking-widest leading-relaxed px-4">{dbStatsError}</span>
-                                                    </div>
-                                                ) : dbStorageStats ? ((() => {
-                                                    const isRestrictedPct = typeof dbStorageStats.percentageUsed === 'string';
-                                                    const pct = typeof dbStorageStats.percentageUsed === 'number' ? dbStorageStats.percentageUsed : 0;
-                                                    const pctString = isRestrictedPct ? '1.0% (EMU)' : `${pct.toFixed(4)}%`;
-                                                    
-                                                    const isRestrictedSize = typeof dbStorageStats.totalSizeEstimatedBytes === 'string';
-                                                    const estSizeVal = typeof dbStorageStats.totalSizeEstimatedBytes === 'number' ? dbStorageStats.totalSizeEstimatedBytes : 0;
-                                                    const sizeLabel = isRestrictedSize 
-                                                        ? 'OFFLINE_ONLY'
-                                                        : estSizeVal > 1024 * 1024 
-                                                            ? `${(estSizeVal / (1024 * 1024)).toFixed(2)} MB`
-                                                            : `${(estSizeVal / 1024).toFixed(1)} KB`;
-                                                            
-                                                    const summariesLabel = typeof dbStorageStats.summariesCount === 'string' 
-                                                        ? String(mergedShiftSummaries.length) 
-                                                        : String(dbStorageStats.summariesCount);
-                                                        
-                                                    const leaderboardLabel = typeof dbStorageStats.leaderboardCount === 'string' 
-                                                        ? 'OFFLINE' 
-                                                        : String(dbStorageStats.leaderboardCount);
-
-                                                    const statusColor = isRestrictedPct ? 'emerald' : pct > 80 ? 'rose' : pct > 50 ? 'amber' : 'emerald';
-
-                                                    return (
-                                                        <div className="space-y-4">
-                                                            {/* Target Progress Bar */}
-                                                            <div className="space-y-3">
-                                                                <div className="flex justify-between items-end px-2">
-                                                                    <div className="flex flex-col">
-                                                                        <span className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Usage Coefficient</span>
-                                                                        <span className={`text-2xl font-black italic tracking-tighter ${statusColor === 'emerald' ? 'text-emerald-400' : statusColor === 'amber' ? 'text-amber-500' : 'text-rose-500'}`}>{pctString}</span>
-                                                                    </div>
-                                                                    <div className="text-right">
-                                                                        <span className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Capacity Bound</span>
-                                                                        <p className="text-sm font-black text-slate-300 italic tracking-tight">1,024 MB (v1_TIER)</p>
-                                                                    </div>
-                                                                </div>
-                                                                <div className="w-full h-3 bg-slate-900 rounded-full border border-slate-800/80 p-0.5 overflow-hidden shadow-inner flex gap-0.5">
-                                                                    {Array.from({ length: 40 }).map((_, i) => {
-                                                                        const threshold = (i / 40) * 100;
-                                                                        const isActive = isRestrictedPct ? threshold <= 5 : threshold <= pct;
-                                                                        return (
-                                                                            <div 
-                                                                                key={i} 
-                                                                                className={`h-full flex-1 rounded-[1px] transition-all duration-700 ${isActive ? (statusColor === 'emerald' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : statusColor === 'amber' ? 'bg-amber-500' : 'bg-rose-500') : 'bg-slate-950/80'}`}
-                                                                            />
-                                                                        );
-                                                                    })}
-                                                                </div>
-                                                            </div>
-
-                                                            {/* Telemetry Bento Grid */}
-                                                            <div className="grid grid-cols-2 gap-2.5">
-                                                                <div className="bg-slate-900/60 border border-slate-800/80 p-3.5 rounded-xl shadow-sm relative overflow-hidden group hover:border-sky-500/30 transition-all">
-                                                                    <div className="absolute -bottom-4 -right-4 opacity-5 group-hover:opacity-10 transition-opacity">
-                                                                        <HardDrive size={48} className="text-white" />
-                                                                    </div>
-                                                                    <span className="text-[9px] font-bold text-slate-600 block uppercase tracking-widest mb-1">Allocated Volume</span>
-                                                                    <span className="text-lg font-black text-white italic tracking-tight">{sizeLabel}</span>
-                                                                </div>
-                                                                <div className="bg-slate-900/60 border border-slate-800/80 p-3.5 rounded-xl shadow-sm relative overflow-hidden group hover:border-amber-500/30 transition-all">
-                                                                    <div className="absolute -bottom-4 -right-4 opacity-5 group-hover:opacity-10 transition-opacity">
-                                                                        <FileBox size={48} className="text-white" />
-                                                                    </div>
-                                                                    <span className="text-[9px] font-bold text-slate-600 block uppercase tracking-widest mb-1">Index Count</span>
-                                                                    <span className="text-lg font-black text-white italic tracking-tight">Σ {summariesLabel}</span>
-                                                                </div>
-                                                                <div className="bg-slate-900/60 border border-slate-800/80 p-3.5 rounded-xl shadow-sm relative overflow-hidden group hover:border-emerald-500/30 transition-all col-span-2">
-                                                                    <div className="absolute -bottom-4 -right-4 opacity-5 group-hover:opacity-10 transition-opacity">
-                                                                        <ShieldCheck size={48} className="text-white" />
-                                                                    </div>
-                                                                    <div className="flex justify-between items-center">
-                                                                        <div>
-                                                                            <span className="text-[9px] font-bold text-slate-600 block uppercase tracking-widest mb-0.5">Operational State</span>
-                                                                            <span className={`text-lg font-black italic tracking-tighter uppercase ${statusColor === 'emerald' ? 'text-emerald-400' : statusColor === 'amber' ? 'text-amber-500' : 'text-rose-500'}`}>
-                                                                                {isRestrictedPct ? "SYNC_OPTIMIZED" :
-                                                                                 pct > 80 ? "THROTTLE_WARNING" :
-                                                                                 pct > 50 ? "NOMINAL_ACCESS" : "OPTIMAL_KERNEL"}
-                                                                            </span>
-                                                                        </div>
-                                                                        <div className="text-right">
-                                                                            <span className="text-[9px] font-bold text-slate-600 block uppercase tracking-widest mb-0.5">Live Feed</span>
-                                                                            <div className="flex items-center gap-2 justify-end">
-                                                                                <div className={`w-1.5 h-1.5 rounded-full ${statusColor === 'emerald' ? 'bg-emerald-500' : 'bg-amber-500'} animate-pulse`}></div>
-                                                                                <span className="text-[10px] font-black text-white font-mono">{leaderboardLabel} REC</span>
-                                                                            </div>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    );
-                                                })())
-                                                : (
-                                                    <div className="py-12 text-center space-y-4">
-                                                        <Activity size={32} className="text-slate-800 mx-auto" />
-                                                        <p className="text-[11px] text-slate-600 font-black uppercase tracking-[0.4em]">No Telemetry Logs Detected</p>
-                                                    </div>
-                                                )}
-
-                                                {isUserAdmin() && (
-                                                    <div className="pt-2 space-y-4 border-t border-slate-800/60">
-                                                        <div className="flex items-center gap-3 px-1 mb-2">
-                                                            <Wrench size={14} className="text-slate-700" />
-                                                            <div className="text-[10px] font-black text-slate-700 uppercase tracking-[0.3em]">System Maintenance Rigs</div>
-                                                        </div>
-                                                        
-                                                        <div className="grid grid-cols-1 gap-3">
-                                                            {/* IMAGE STRIPPER BTN */}
-                                                            <button 
-                                                                disabled={reclaimingSpace}
-                                                                onClick={async () => {
-                                                                    haptic('heavy');
-                                                                    if (confirm("SCRUB_PROTOCOL: This will strip high-volume image data & manifest snapshots older than 14 days. Operational numerical data remains intact. Reclaim IO throughput?")) {
-                                                                        setReclaimingSpace(true);
-                                                                        setSpaceReclaimMsg(null);
-                                                                        const res = await stripOldImagesFromDatabase(2);
-                                                                        setReclaimingSpace(false);
-                                                                        if (res.success) {
-                                                                            setSpaceReclaimMsg(`SCRUB_COMPLETE: Optimized ${res.updatedCount} legacy buffers.`);
-                                                                            loadDbStorageStats();
-                                                                        } else {
-                                                                            setSpaceReclaimMsg(`EXC: ${res.error}`);
-                                                                        }
-                                                                    }
-                                                                }}
-                                                                className="w-full py-3.5 bg-amber-500/5 hover:bg-amber-500/15 text-amber-600 hover:text-amber-400 border border-amber-600/10 hover:border-amber-500/30 rounded-xl text-[11px] font-black uppercase tracking-[0.2em] flex items-center justify-center gap-3 transition-all active:scale-95 disabled:opacity-50 group grow shadow-sm"
-                                                            >
-                                                                <Layers size={18} className="group-hover:rotate-12 transition-transform" /> SCRUB_IMAGE_BUFFERS (&gt;2W)
-                                                            </button>
-
-                                                            {/* MANUAL PURGER BTN */}
-                                                            <button 
-                                                                disabled={reclaimingSpace}
-                                                                onClick={async () => {
-                                                                    haptic('heavy');
-                                                                    const message = isUserAdmin() 
-                                                                        ? "PURGE_ALL_HISTORICAL: This will permanently delete all summaries and global leaderboard records older than 42 days. Confirm irreversible erasure?"
-                                                                        : "PURGE_SESSION_HISTORY: This will erase your personal shift summaries older than 42 days. Proceed?";
-                                                                    
-                                                                    if (confirm(message)) {
-                                                                        setReclaimingSpace(true);
-                                                                        setSpaceReclaimMsg(null);
-                                                                        const res = await purgeDatabaseOlderThan6Weeks(isUserAdmin());
-                                                                        setReclaimingSpace(false);
-                                                                        if (res.success) {
-                                                                            setSpaceReclaimMsg(`DUMPED: Deleted ${res.summariesDeleted} summaries & ${res.leaderboardDeleted} indices.`);
-                                                                            loadDbStorageStats();
-                                                                        } else {
-                                                                            setSpaceReclaimMsg(`EXC: ${res.error}`);
-                                                                        }
-                                                                    }
-                                                                }}
-                                                                className="w-full py-3.5 bg-rose-500/5 hover:bg-rose-500/15 text-rose-600 hover:text-rose-400 border border-rose-600/10 hover:border-rose-500/30 rounded-xl text-[11px] font-black uppercase tracking-[0.2em] flex items-center justify-center gap-3 transition-all active:scale-95 disabled:opacity-50 group grow shadow-sm"
-                                                            >
-                                                                <Trash2 size={18} className="group-hover:scale-110 transition-transform" /> PURGE_LEGACY_LOGS (&gt;6W)
-                                                            </button>
-                                                        </div>
-
-                                                        {spaceReclaimMsg && (
-                                                            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-4 bg-slate-950 rounded-[24px] border-2 border-slate-800 text-center text-[10px] font-black text-sky-400 italic font-mono uppercase tracking-widest shadow-lg">
-                                                                {spaceReclaimMsg}
-                                                            </motion.div>
-                                                        )}
-
-                                                        <div className="flex items-center gap-3 justify-center px-4 py-3 bg-slate-900/30 rounded-2xl border border-dashed border-slate-800">
-                                                            <Shield size={12} className="text-slate-700 shrink-0" />
-                                                            <p className="text-[10px] text-slate-700 font-bold uppercase tracking-tight italic text-center">
-                                                                "Autonomous maintenance protocol enabled. Logs exceeding 42-day retention are scrubbed daily."
-                                                            </p>
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            <div className="space-y-3 pt-2">
-                                                <div className="grid grid-cols-2 gap-3">
-                                                    <button className="py-3.5 bg-slate-950 border border-slate-800/80 rounded-xl text-[11px] font-black uppercase tracking-[0.2em] text-slate-500 hover:text-emerald-400 hover:border-emerald-500/30 flex items-center justify-center gap-2.5 transition-all active:scale-95 shadow-sm" onClick={downloadReport}>
-                                                        <FileSpreadsheet size={18} /> EXPORT_CSV
-                                                    </button>
-                                                    <button className="py-3.5 bg-slate-950 border border-slate-800/80 rounded-xl text-[11px] font-black uppercase tracking-[0.2em] text-slate-500 hover:text-rose-400 hover:border-rose-500/30 flex items-center justify-center gap-2.5 transition-all active:scale-95 shadow-sm" onClick={handleEmergencySignOut}>
-                                                        <Power size={18} /> DROP_SESSION
-                                                    </button>
-                                                </div>
-                                                
-                                                <div className="grid grid-cols-2 gap-3">
-                                                    <button 
-                                                        className="py-3.5 bg-slate-950 border border-slate-800/80 rounded-xl text-[11px] font-black uppercase tracking-[0.2em] text-slate-500 hover:text-sky-400 hover:border-sky-500/30 flex items-center justify-center gap-2.5 transition-all active:scale-95 shadow-sm" 
-                                                        onClick={() => { haptic('medium'); setShowAbout(true); }}
-                                                    >
-                                                        <Cpu size={18} /> OS_ABOUT
-                                                    </button>
-                                                    <button 
-                                                        className="py-3.5 bg-slate-950 border border-slate-800/80 rounded-xl text-[11px] font-black uppercase tracking-[0.2em] text-slate-500 hover:text-blue-400 hover:border-blue-500/30 flex items-center justify-center gap-2.5 transition-all active:scale-95 shadow-sm" 
-                                                        onClick={() => { haptic('medium'); setShowAboutDeveloper(true); }}
-                                                    >
-                                                        <Terminal size={18} /> DEV_PROFILE
-                                                    </button>
-                                                </div>
-                                            </div>
-
-                                            <div className="pt-4 border-t border-slate-800/60 space-y-4">
-                                                <button 
-                                                    className={`w-full py-3.5 rounded-[16px] font-black text-[11px] uppercase tracking-[0.2em] transition-all flex flex-col items-center justify-center gap-1 relative overflow-hidden ${availableUpdate ? 'bg-emerald-500 text-white shadow-xl shadow-emerald-500/20' : 'bg-slate-950 text-slate-600 border border-slate-800/80 shadow-inner'}`}
-                                                    onClick={async () => {
-                                                        if (availableUpdate) {
-                                                            handleUpdateApp();
-                                                        } else {
-                                                            haptic('medium');
-                                                            const update = await checkUpdate();
-                                                            if (update) {
-                                                                setAvailableUpdate(update);
-                                                            } else {
-                                                                setLastUpdateCheck(Date.now());
-                                                                haptic('heavy');
-                                                            }
-                                                        }
-                                                    }}
-                                                    disabled={updating}
-                                                >
-                                                    {availableUpdate && !updating && (
-                                                        <div className="absolute inset-0 bg-white/10 animate-pulse"></div>
-                                                    )}
-                                                    <div className="flex items-center gap-3">
-                                                        <RefreshCw size={16} className={updating ? 'animate-spin' : ''} /> 
-                                                        <span>{updating ? 'DEPLOYING_PATCH...' : availableUpdate ? 'PATCH_READY_V' + availableUpdate : 'BUILD_STABLE_V' + APP_VERSION}</span>
-                                                    </div>
-                                                    {availableUpdate && !updating ? (
-                                                        <span className="text-[9px] font-bold uppercase tracking-widest opacity-80 animate-bounce">MANDATORY UPGRADE REQUIRED</span>
-                                                    ) : (
-                                                        <span className="text-[9px] font-bold uppercase tracking-[0.25em] opacity-40">Polling Master Branch...</span>
-                                                    )}
-                                                </button>
-                                                {isUserAdmin() && (
-                                                    <button 
-                                                        className="w-full py-3.5 bg-rose-500/5 text-rose-600 border border-rose-600/20 rounded-[16px] text-[11px] font-black uppercase tracking-[0.3em] flex items-center justify-center gap-2.5 hover:bg-rose-500 hover:text-white transition-all active:scale-95 shadow-sm"
-                                                        onClick={() => setPinModal({ show: true, type: 'reset', input: '' })}
-                                                    >
-                                                        <XOctagon size={18} /> FACTORY_SCRUB
-                                                    </button>
-                                                )}
-                                            </div>
-                                        </motion.div>
-                                    )}
-                                    {/* Admin settings tab removed - completely migrated to dedicated Admin page screen */}
-                                </div>
-
-                                {/* Footer */}
-                                <div className="p-3 sm:p-3.5 bg-slate-950 backdrop-blur-3xl border-t border-slate-800">
-                                    <button 
-                                        className={`w-full py-3 rounded-xl ${theme.bg} text-white font-black text-xs uppercase tracking-[0.4em] shadow-2xl ${theme.shadow} active:scale-[0.98] transition-all flex items-center justify-center gap-2.5 relative overflow-hidden group min-h-[46px]`}
-                                        onClick={() => { haptic('medium'); setShowSettings(false); }}
-                                    >
-                                        <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
-                                        <ShieldCheck size={18} className="relative" /> 
-                                        <span className="relative">COMMIT_CHANGES</span>
-                                    </button>
-                                </div>
-                            </motion.div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
-
-                    <ClockInModal 
-                        isOpen={showClockInModal}
-                        onClose={() => setShowClockInModal(false)}
+                    <HistoryLeaderboardOverlays
+                        theme={theme}
+                        haptic={haptic}
+                        showClockInModal={showClockInModal}
+                        setShowClockInModal={setShowClockInModal}
                         manualClockType={manualClockType}
                         manualClockTime={manualClockTime}
                         setManualClockTime={setManualClockTime}
-                        theme={theme}
-                        onConfirm={(type, time) => {
-                            if (type === 'in') {
-                                manualStart(time);
-                            } else {
-                                manualEnd(time);
-                            }
-                        }}
-                    />
-                    {showLeaderboard && (
-                        <div className="fixed inset-0 bg-slate-950/80 z-[100] flex flex-col justify-end backdrop-blur-sm transition-all">
-                            <div className={`${theme.panel} ${theme.radius} p-6 border shadow-2xl animate-in slide-in-from-bottom-full duration-200 h-[85vh] flex flex-col`}>
-                                <div className="flex justify-between items-center mb-4">
-                                    <div className="flex items-center gap-2">
-                                        <Trophy size={24} className="text-amber-400" />
-                                        <h3 className={`text-xl font-bold text-white ${theme.font}`}>Leaderboard</h3>
-                                    </div>
-                                    <div className="flex gap-2">
-                                        <button 
-                                            onClick={() => fetchLeaderboardManual(true)}
-                                            disabled={fetchingLeaderboard}
-                                            className={`w-11 h-11 rounded-2xl bg-slate-800 flex items-center justify-center text-slate-400 hover:text-white border border-slate-700/50 ${fetchingLeaderboard ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                            title="Sync latest leaderboard data"
-                                        >
-                                            <RefreshCw size={18} className={fetchingLeaderboard ? 'animate-spin' : ''} />
-                                        </button>
-                                        <button 
-                                            onClick={() => { haptic('light'); setShowLeaderboard(false); }} 
-                                            className="w-11 h-11 rounded-2xl bg-slate-800 flex items-center justify-center text-slate-400 hover:text-white border border-slate-700/50"
-                                            aria-label="Close Leaderboard"
-                                        >
-                                            <X size={18}/>
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {/* Leaderboard Tab Switcher */}
-                                <div className="grid grid-cols-2 gap-2 p-1 bg-slate-900/90 rounded-2xl border border-slate-800 mb-4 shrink-0">
-                                    <button
-                                        onClick={() => { haptic('light'); setLeaderboardTab('live'); }}
-                                        className={`py-2.5 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
-                                            leaderboardTab === 'live' 
-                                                ? 'bg-slate-800 text-amber-400 shadow-md border border-slate-700/60' 
-                                                : 'text-slate-400 hover:text-slate-200'
-                                        }`}
-                                    >
-                                        <Trophy size={14} className={leaderboardTab === 'live' ? 'text-amber-400' : 'text-slate-500'} />
-                                        <span>Live & Shift Rank</span>
-                                    </button>
-                                    <button
-                                        onClick={() => { haptic('light'); setLeaderboardTab('prev_month'); }}
-                                        className={`py-2.5 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
-                                            leaderboardTab === 'prev_month' 
-                                                ? 'bg-slate-800 text-sky-400 shadow-md border border-slate-700/60' 
-                                                : 'text-slate-400 hover:text-slate-200'
-                                        }`}
-                                    >
-                                        <Calendar size={14} className={leaderboardTab === 'prev_month' ? 'text-sky-400' : 'text-slate-500'} />
-                                        <span>Previous Month</span>
-                                    </button>
-                                </div>
-                                
-                                <div className="flex-1 overflow-y-auto pr-1">
-                                    {leaderboardTab === 'prev_month' ? (
-                                        <PreviousMonthSummary 
-                                            summaries={allShiftSummariesList.length > 0 ? allShiftSummariesList : (adminAllSummaries.length > 0 ? adminAllSummaries : shiftSummaries)}
-                                            theme={theme}
-                                            currentDate={new Date()}
-                                        />
-                                    ) : (
-                                        <div className="space-y-6">
-                                            <div className="space-y-4">
-                                                <div className="flex items-center gap-2 px-1">
-                                                    <Sparkles size={14} className="text-sky-400" />
-                                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Zone Competition</span>
-                                                </div>
-                                                <div className="grid grid-cols-3 gap-2">
-                                                    {Object.entries(zoneXP).map(([zone, xp]) => {
-                                                        const currentXp = xp as number;
-                                                        const values = Object.values(zoneXP) as number[];
-                                                        const total = values.reduce((a, b) => a + b, 0) || 1;
-                                                        const pct = (currentXp / total) * 100;
-                                                        const zTheme = THEMES[zone] || THEMES.AMBIENT;
-                                                        return (
-                                                            <div key={zone} className={`bg-slate-800/40 border border-slate-700/50 ${theme.radius} p-2.5 flex flex-col items-center`}>
-                                                                <span className={`text-[8px] font-black uppercase tracking-tighter mb-1 ${zTheme.text}`}>{zone}</span>
-                                                                <span className="text-xs font-black text-white">{currentXp.toLocaleString()}</span>
-                                                                <div className={`w-full bg-slate-900 h-1 ${theme.radius} mt-2 overflow-hidden`}>
-                                                                    <div className={`h-full ${zTheme.bg}`} style={{ width: `${pct}%` }}></div>
-                                                                </div>
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </div>
-
-                                            {liveUsers.length > 0 && (
-                                                <div className="space-y-3">
-                                                    <div className="flex items-center gap-2 px-1">
-                                                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
-                                                        <span className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em]">Active Now</span>
-                                                    </div>
-                                                    {liveUsers.map((user, idx) => (
-                                                        <div key={`live-${idx}`} className="bg-slate-800/80 p-3.5 sm:p-4 rounded-2xl border-2 border-emerald-500/20 flex flex-col gap-3 shadow-lg shadow-emerald-500/5">
-                                                            <div className="flex items-center justify-between gap-2.5 sm:gap-4 flex-wrap sm:flex-nowrap">
-                                                                <div className="flex items-center gap-3 min-w-0 flex-1">
-                                                                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black text-xs border border-emerald-500/30 shrink-0">
-                                                                        LIVE
-                                                                    </div>
-                                                                    <div className="flex-1 min-w-0">
-                                                                        <div className="font-bold text-white flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                                                                            <span className="truncate">{user.name}</span>
-                                                                            {user.isBot && (
-                                                                                <span className="text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 uppercase tracking-wider font-black shrink-0 flex items-center gap-1">
-                                                                                    <Bot size={10} className="text-cyan-400" /> AI BOT
-                                                                                </span>
-                                                                            )}
-                                                                            <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-tighter shrink-0 ${user.status === 'picking' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : user.status === 'break' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-slate-400/10 text-slate-400 border-slate-400/20'}`}>
-                                                                                {user.status || 'Active'}
-                                                                            </span>
-                                                                        </div>
-                                                                        <div className="text-[9px] sm:text-[10px] text-slate-400 uppercase tracking-wider truncate">
-                                                                            {user.department}
-                                                                            {user.currentOrder && (
-                                                                                <span className="ml-1.5 text-sky-400 font-bold border border-sky-500/20 px-1 rounded bg-sky-500/10">Order: {user.currentOrder}</span>
-                                                                            )}
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                                <div className="flex items-center gap-2 sm:gap-3 shrink-0 ml-auto">
-                                                                    {idx < 5 && (
-                                                                        <LeaderboardInteractions
-                                                                            targetName={user.name}
-                                                                            senderName={shiftData.operator || userProfile?.username || 'You'}
-                                                                            rank={idx + 1}
-                                                                            onSent={(msg) => showToast(msg, 'success')}
-                                                                        />
-                                                                    )}
-                                                                    <div className="text-right">
-                                                                        <div className="text-lg sm:text-xl font-black text-emerald-400 leading-tight">{user.rate}</div>
-                                                                        <div className="text-[9px] sm:text-[10px] text-slate-400 font-medium uppercase tracking-widest leading-none">P/H</div>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-
-                                                            {(user.customStatus || user.listeningTo) && (
-                                                                <div className="bg-slate-900/60 px-3 py-1.5 rounded-xl border border-slate-700/30 flex items-center gap-2">
-                                                                    <span className="text-xs animate-bounce shrink-0">🎵</span>
-                                                                    <span className="text-[10px] sm:text-[11px] text-indigo-300 italic truncate font-medium">Vibe: <span className="text-white not-italic font-semibold">{user.customStatus || user.listeningTo}</span></span>
-                                                                </div>
-                                                            )}
-                                                            
-                                                            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/50">
-                                                                <div className="flex flex-col">
-                                                                    <span className="text-[9px] sm:text-[10px] text-slate-400 uppercase font-bold tracking-wider">Activity</span>
-                                                                    <span className="text-xs text-white font-mono break-all">{user.totalCases || 0} cs • {user.xp || 0} XP</span>
-                                                                </div>
-                                                                <div className="flex flex-col text-right">
-                                                                    <span className="text-[9px] sm:text-[10px] text-slate-400 uppercase font-bold tracking-wider">Time Active</span>
-                                                                    <span className="text-xs text-white font-mono">{user.activeSeconds ? formatHHMM(user.activeSeconds) : '00h 00m'}</span>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-
-                                            <div className="space-y-3">
-                                                <div className="flex items-center gap-2 px-1">
-                                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">All-Time Rankings</span>
-                                                </div>
-                                                {/* Merge live users into leaderboard */}
-                                                {leaderboardData.map((entry, idx) => {
-                                                    const liveUser = liveUsers.find(u => u.name.toUpperCase() === entry.name.toUpperCase());
-                                                    const displayRate = liveUser ? liveUser.rate : entry.rate;
-                                                    const isLive = !!liveUser;
-
-                                                    return (
-                                                        <div key={idx} className={`p-3.5 sm:p-4 rounded-2xl border flex flex-col gap-2 ${isLive ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-slate-800/50 border-slate-700/50'}`}>
-                                                            <div className="flex items-center justify-between gap-2.5 sm:gap-4 flex-wrap sm:flex-nowrap">
-                                                                <div className="flex items-center gap-3 min-w-0 flex-1">
-                                                                    <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center font-bold text-xs sm:text-sm shrink-0 ${idx === 0 ? 'bg-amber-400 text-slate-900 shadow-md shadow-amber-400/20' : idx === 1 ? 'bg-slate-300 text-slate-900' : idx === 2 ? 'bg-orange-500 text-white' : 'bg-slate-700 text-slate-400'}`}>
-                                                                        {idx + 1}
-                                                                    </div>
-                                                                    <div className="flex-1 min-w-0">
-                                                                        <div className="font-bold text-white truncate flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                                                                            <span className="truncate">{entry.name}</span>
-                                                                            {(entry.isBot || liveUser?.isBot) && (
-                                                                                <span className="text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 uppercase tracking-wider font-black shrink-0 flex items-center gap-1">
-                                                                                    <Bot size={10} className="text-cyan-400" /> AI BOT
-                                                                                </span>
-                                                                            )}
-                                                                            {isLive && (
-                                                                                <span className="text-[8px] sm:text-[9px] bg-emerald-500 text-white px-1 rounded uppercase animate-pulse">Live</span>
-                                                                            )}
-                                                                        </div>
-                                                                        <div className="text-[9px] sm:text-[10px] text-slate-400 uppercase tracking-wider truncate">
-                                                                            {entry.department} • {entry.date}
-                                                                        </div>
-                                                                        {entry.cases !== undefined && (
-                                                                            <div className="text-[9px] sm:text-[10px] text-slate-400 font-medium">
-                                                                                {entry.cases || 0} cases
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-                                                                <div className="flex items-center gap-2 sm:gap-3 shrink-0 ml-auto">
-                                                                    {idx < 5 && (
-                                                                        <LeaderboardInteractions
-                                                                            targetName={entry.name}
-                                                                            senderName={shiftData.operator || userProfile?.username || 'You'}
-                                                                            rank={idx + 1}
-                                                                            onSent={(msg) => showToast(msg, 'success')}
-                                                                        />
-                                                                    )}
-                                                                    <div className="text-right">
-                                                                        <div className={`text-base sm:text-lg font-black leading-tight ${displayRate >= (entry.targetRate || 200) ? 'text-emerald-400' : 'text-slate-400'}`}>{displayRate}</div>
-                                                                        <div className="text-[9px] sm:text-[10px] text-slate-400 font-medium uppercase tracking-widest leading-none">Goal: {entry.targetRate || 200}</div>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                            {isLive && liveUser && (liveUser.customStatus || liveUser.listeningTo) && (
-                                                                <div className="bg-slate-900/40 p-2 rounded-xl border border-slate-800/30 flex items-center gap-2 mt-1">
-                                                                    <span className="text-[10px] animate-pulse shrink-0">🎵</span>
-                                                                    <span className="text-[10px] sm:text-[11px] text-indigo-300 italic truncate font-medium">Vibe: <span className="text-slate-200 not-italic font-semibold">{liveUser.customStatus || liveUser.listeningTo}</span></span>
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })}
-                                                {leaderboardData.length === 0 && liveUsers.length === 0 && (
-                                                    <div className="text-center py-12 text-slate-400 italic">No rankings yet. Finish a shift to be first!</div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                                
-                                <button 
-                                    className="w-full mt-4 py-3.5 bg-slate-800 text-white rounded-2xl font-bold text-base hover:bg-slate-700 transition-all border border-slate-700 shrink-0"
-                                    onClick={() => { haptic('light'); setShowLeaderboard(false); }}
-                                >
-                                    CLOSE
-                                </button>
-                            </div>
-                        </div>
-                    )}
-
-
-
-                    {viewingLabels && viewingLabels.length > 0 && (
-                        <div className="fixed inset-0 z-[120] bg-black/95 flex flex-col items-center justify-center p-4 backdrop-blur-md overflow-y-auto">
-                            <div className="flex flex-col gap-6 w-full max-w-full my-auto pb-24 pt-8 items-center">
-                            {viewingLabels.map((lbl, idx) => (
-                                typeof lbl === 'string' && (lbl.startsWith('data:image') || lbl.startsWith('http') || lbl.startsWith('blob:') || lbl.startsWith('/')) ? (
-                                    <div key={idx} className="relative">
-                                        {viewingLabels.length > 1 && (
-                                            <span className="absolute -top-3 -left-3 w-8 h-8 bg-sky-500 text-white rounded-full flex items-center justify-center font-bold shadow-lg z-10 border-2 border-black">{idx + 1}</span>
-                                        )}
-                                        <img src={lbl} alt={`Label ${idx + 1}`} className="max-w-full max-h-[80vh] object-contain rounded-xl shadow-2xl" />
-                                    </div>
-                                ) : (
-                                    <div key={idx} className="text-center p-8 bg-slate-900 rounded-2xl border border-rose-500 max-w-sm w-full mx-auto">
-                                        <div className="text-rose-500 text-4xl mb-4">⚠️</div>
-                                        <h3 className="text-white font-bold mb-2">Image Unavailable</h3>
-                                        <p className="text-slate-400 text-sm">This label was corrupted or saved incorrectly in a previous version of the app and cannot be recovered.</p>
-                                    </div>
-                                )
-                            ))}
-                            </div>
-                             <div className="fixed bottom-6 left-0 right-0 flex justify-center pb-safe">
-                                 <button 
-                                     onClick={() => setViewingLabels(null)}
-                                     className="px-8 py-3.5 bg-white text-black font-black uppercase tracking-widest text-xs rounded-full hover:bg-slate-100 transition-colors shadow-2xl border-4 border-black/20"
-                                 >
-                                     Close Labels
-                                 </button>
-                             </div>
-                        </div>
-                    )}
-
-                    {showRota && (() => {
-                        // Rota Helper Logic
-                        const getRotaCalendarDays = (offset: number) => {
-                            const date = new Date(now.getFullYear(), now.getMonth() + offset, 1);
-                            const year = date.getFullYear();
-                            const month = date.getMonth();
-
-                            const firstDay = new Date(year, month, 1);
-                            const lastDay = new Date(year, month + 1, 0);
-
-                            const days = [];
-                            let startDayOfWeek = firstDay.getDay() - 1;
-                            if (startDayOfWeek === -1) startDayOfWeek = 6; // Monday start
-
-                            for (let i = 0; i < startDayOfWeek; i++) {
-                                days.push(null);
-                            }
-                            
-                            for (let i = 1; i <= lastDay.getDate(); i++) {
-                                days.push(new Date(year, month, i, 12, 0, 0));
-                            }
-                            return { days, year, month };
-                        };
-
-                        const isWorkDay = (date: Date) => {
-                            const dStr = getLocalDateString(date);
-                            const override = shiftData.rotaOverrides?.[dStr];
-                            if (override) {
-                                return override === 'work';
-                            }
-
-                            if (!shiftData.rotaConfig?.anchorDate) return false;
-                            const anchor = new Date(shiftData.rotaConfig.anchorDate + "T12:00:00Z");
-                            const target = new Date(date);
-                            target.setHours(12, 0, 0, 0);
-                            const msDiff = target.getTime() - anchor.getTime();
-                            
-                            const dayDiffRaw = Math.round(msDiff / (1000 * 60 * 60 * 24));
-                            const totalDaysInCycle = (shiftData.rotaConfig.weeks || 3) * 7;
-                            
-                            let dayDiff = dayDiffRaw % totalDaysInCycle;
-                            if (dayDiff < 0) dayDiff += totalDaysInCycle;
-                            
-                            const weekIndex = Math.floor(dayDiff / 7);
-                            const dayIndex = dayDiff % 7;
-                            
-                            if (!shiftData.rotaConfig.pattern[weekIndex]) return false;
-                            const val = shiftData.rotaConfig.pattern[weekIndex][dayIndex];
-                            return typeof val === 'number' ? val > 0 : !!val;
-                        };
-
-                        const getWorkedHoursForDate = (date: Date): number | null => {
-                            const targetDateStr = getLocalDateString(date);
-
-                            let totalMsOnThisDay = 0;
-                            let hasActivity = false;
-
-                            // 1. Process finalized shift summaries
-                            if (mergedShiftSummaries && mergedShiftSummaries.length > 0) {
-                                mergedShiftSummaries.forEach(summary => {
-                                    const clockInDateStr = summary.clockInTime ? getLocalDateString(new Date(summary.clockInTime)) : '';
-                                    const normSummaryDate = normalizeDateStr(summary.date);
-
-                                    if (clockInDateStr === targetDateStr || normSummaryDate === targetDateStr) {
-                                        hasActivity = true;
-                                        const activeSecs = summary.activeSeconds || summary.totalSeconds;
-                                        if (activeSecs && activeSecs > 0) {
-                                            totalMsOnThisDay += activeSecs * 1000;
-                                        } else {
-                                            const startTime = summary.clockInTime;
-                                            const endTime = summary.clockOutTime;
-                                            if (startTime && endTime && endTime > startTime) {
-                                                totalMsOnThisDay += (endTime - startTime);
-                                            }
-                                        }
-                                    }
-                                });
-                            }
-
-                            // 2. Include current running shift (real-time live math)
-                            if (shiftData.firstStartTime && !shiftData.isShiftFinalized) {
-                                if (getLocalDateString(new Date(shiftData.firstStartTime)) === targetDateStr) {
-                                    hasActivity = true;
-                                    const startTime = shiftData.firstStartTime;
-                                    const endTime = Date.now();
-                                    totalMsOnThisDay += (endTime - startTime);
-                                }
-                            }
-
-                            if (!hasActivity) return null;
-                            
-                            return parseFloat((totalMsOnThisDay / (1000 * 60 * 60)).toFixed(2));
-                        };
-
-                        const getPlannedHours = (date: Date) => {
-                            const dStr = getLocalDateString(date);
-                            
-                            const override = shiftData.rotaOverrides?.[dStr];
-                            if (override) {
-                                if (override === 'holiday' || override === 'sick' || override === 'off') return 0;
-                                return 8; // Default value for overridden work days if pattern is 0
-                            }
-
-                            if (!shiftData.rotaConfig?.anchorDate) return 0;
-                            const anchor = new Date(shiftData.rotaConfig.anchorDate + "T12:00:00Z");
-                            const target = new Date(date);
-                            target.setHours(12, 0, 0, 0);
-                            const msDiff = target.getTime() - anchor.getTime();
-                            
-                            const dayDiffRaw = Math.round(msDiff / (1000 * 60 * 60 * 24));
-                            const totalDaysInCycle = (shiftData.rotaConfig.weeks || 3) * 7;
-                            
-                            let dayDiff = dayDiffRaw % totalDaysInCycle;
-                            if (dayDiff < 0) dayDiff += totalDaysInCycle;
-                            
-                            const weekIndex = Math.floor(dayDiff / 7);
-                            const dayIndex = dayDiff % 7;
-                            
-                            if (!shiftData.rotaConfig.pattern[weekIndex]) return 0;
-                            const val = shiftData.rotaConfig.pattern[weekIndex][dayIndex];
-                            if (typeof val === 'number') return val;
-                            return val ? 8 : 0;
-                        };
-
-                        const handleTogglePatternDay = (weekIndex: number, dayIndex: number) => {
-                            haptic('light');
-                            const currentVal = shiftData.rotaConfig.pattern[weekIndex]?.[dayIndex];
-                            let newVal: number;
-                            
-                            let currentHours = 0;
-                            if (typeof currentVal === 'number') {
-                                currentHours = currentVal;
-                            } else if (currentVal === true) {
-                                currentHours = 8;
-                            }
-                            
-                            if (currentHours === 0) newVal = 8;
-                            else if (currentHours === 8) newVal = 10;
-                            else if (currentHours === 10) newVal = 12;
-                            else newVal = 0;
-                            
-                            const opName = (shiftData.operator || localStorage.getItem('lastUser') || 'default').toUpperCase().trim();
-                            const newPattern = shiftData.rotaConfig.pattern.map((w: any[], i: number) => 
-                                i === weekIndex ? w.map((v: any, j: number) => j === dayIndex ? newVal : v) : w
-                            );
-                            
-                            let updatedConfig: any;
-                            setShiftData((prev: any) => {
-                                updatedConfig = { ...prev.rotaConfig, pattern: newPattern };
-                                const updated = {
-                                    ...prev, 
-                                    rotaConfig: updatedConfig
-                                };
-                                safeLocalStorage.setItem(`pickData_${opName}`, JSON.stringify(updated), true);
-                                safeLocalStorage.setItem('lastUser', opName);
-                                return updated;
-                            });
-
-                            const uid = userProfile?.uid || auth.currentUser?.uid;
-                            if (uid) {
-                                saveUserProfile(uid, opName, userProfile?.pin, {
-                                    rotaConfig: updatedConfig || { ...shiftData.rotaConfig, pattern: newPattern },
-                                    rotaOverrides: shiftData.rotaOverrides || {}
-                                });
-                            }
-                        };
-
-                        const handleSetAnchor = () => {
-                            const today = new Date();
-                            const day = today.getDay();
-                            const diff = today.getDate() - day + (day === 0 ? -6 : 1); 
-                            const monday = new Date(today.setDate(diff));
-                            
-                            const year = monday.getFullYear();
-                            const monthStr = String(monday.getMonth() + 1).padStart(2, '0');
-                            const dom = String(monday.getDate()).padStart(2, '0');
-                            
-                            const opName = (shiftData.operator || localStorage.getItem('lastUser') || 'default').toUpperCase().trim();
-                            let updatedConfig: any;
-                            setShiftData((prev: any) => {
-                                updatedConfig = { ...prev.rotaConfig, anchorDate: `${year}-${monthStr}-${dom}` };
-                                const updated = {
-                                    ...prev, 
-                                    rotaConfig: updatedConfig
-                                };
-                                safeLocalStorage.setItem(`pickData_${opName}`, JSON.stringify(updated), true);
-                                safeLocalStorage.setItem('lastUser', opName);
-                                return updated;
-                            });
-
-                            const uid = userProfile?.uid || auth.currentUser?.uid;
-                            if (uid) {
-                                saveUserProfile(uid, opName, userProfile?.pin, {
-                                    rotaConfig: updatedConfig || { ...shiftData.rotaConfig, anchorDate: `${year}-${monthStr}-${dom}` },
-                                    rotaOverrides: shiftData.rotaOverrides || {}
-                                });
-                            }
-                        };
-
-                        const handleSetDayOverride = (overrideType: 'work' | 'holiday' | 'sick' | 'off' | 'reset') => {
-                            if (!selectedFutureDate) return;
-                            const dateStr = getLocalDateString(selectedFutureDate);
-                            const opName = (shiftData.operator || localStorage.getItem('lastUser') || 'default').toUpperCase().trim();
-                            let updatedOverrides: Record<string, string> = {};
-                            
-                            setShiftData((prev: any) => {
-                                const nextOverrides = { ...(prev.rotaOverrides || {}) };
-                                if (overrideType === 'reset') {
-                                    delete nextOverrides[dateStr];
-                                } else if (overrideType === 'work') {
-                                    nextOverrides[dateStr] = 'work';
-                                } else {
-                                    nextOverrides[dateStr] = overrideType;
-                                }
-                                updatedOverrides = nextOverrides;
-                                const updated = {
-                                    ...prev,
-                                    rotaOverrides: nextOverrides
-                                };
-                                safeLocalStorage.setItem(`pickData_${opName}`, JSON.stringify(updated), true);
-                                safeLocalStorage.setItem('lastUser', opName);
-                                return updated;
-                            });
-
-                            const uid = userProfile?.uid || auth.currentUser?.uid;
-                            if (uid) {
-                                saveUserProfile(uid, opName, userProfile?.pin, {
-                                    rotaConfig: shiftData.rotaConfig,
-                                    rotaOverrides: updatedOverrides
-                                });
-                            }
-
-                            setSelectedFutureDate(null);
-                            announce(`Rota override updated for this date!`);
-                        };
-
-                        const { days, year, month } = getRotaCalendarDays(rotaMonthOffset);
-                        const monthName = new Date(year, month, 1).toLocaleString('default', { month: 'long' });
-                        
-                        let totalShifts = 0;
-                        days.forEach(d => {
-                            if (d && isWorkDay(d)) totalShifts++;
-                        });
-
-                        return (
-                            <>
-                                <div className="fixed inset-0 bg-slate-950/80 z-[100] flex flex-col justify-end backdrop-blur-sm transition-all">
-                                <div className={`${theme.panel} ${theme.radius} p-6 border shadow-2xl animate-in slide-in-from-bottom-full duration-200 h-[85vh] flex flex-col`}>
-                                    <div className="flex justify-between items-center mb-6">
-                                        <div className="flex items-center gap-2">
-                                            <Calendar size={24} className="text-sky-400" />
-                                            <h3 className={`text-xl font-bold text-white ${theme.font}`}>My Rota</h3>
-                                        </div>
-                                        <div className="flex gap-2">
-                                            <button 
-                                                onClick={() => { haptic('light'); setRotaEditMode(!rotaEditMode); }}
-                                                className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase transition-colors ${rotaEditMode ? 'bg-sky-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
-                                            >
-                                                {rotaEditMode ? 'Done' : 'Edit Pattern'}
-                                            </button>
-                                            <button 
-                                                onClick={() => { haptic('light'); setShowRota(false); }} 
-                                                className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center text-slate-400 hover:text-white border border-slate-700/50"
-                                            >
-                                                <X size={20}/>
-                                            </button>
-                                        </div>
-                                    </div>
-                                    
-                                    <div className="flex-1 overflow-y-auto pr-1 pb-6">
-                                        {!rotaEditMode && (
-                                            <div className="flex bg-slate-900 border border-slate-800 p-1 rounded-2xl mb-5 max-w-md gap-1">
-                                                <button
-                                                    onClick={() => { haptic('light'); setRotaSubTab('calendar'); }}
-                                                    className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2
-                                                        ${rotaSubTab === 'calendar' ? 'bg-sky-500 text-white shadow-xl' : 'text-slate-400 hover:text-slate-200'}`}
-                                                >
-                                                    <Calendar size={14} /> Calendar Rota
-                                                </button>
-                                                <button
-                                                    onClick={() => { haptic('light'); setRotaSubTab('history'); }}
-                                                    className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2
-                                                        ${rotaSubTab === 'history' ? 'bg-sky-500 text-white shadow-xl' : 'text-slate-400 hover:text-slate-200'}`}
-                                                >
-                                                    <FileText size={14} /> Shift History ({mergedShiftSummaries?.length || 0})
-                                                </button>
-                                            </div>
-                                        )}
-
-                                        {!rotaEditMode ? (
-                                            rotaSubTab === 'calendar' ? (
-                                                <div className="space-y-6">
-                                                    {/* Missing Configuration Notice */}
-                                                    {!shiftData.rotaConfig?.anchorDate && (
-                                                        <div className="p-4 bg-sky-500/10 border border-sky-500/20 rounded-2xl flex flex-col items-center text-center gap-2">
-                                                            <Sparkles size={24} className="text-sky-450" />
-                                                            <h4 className="text-white font-bold">New Rota Feature</h4>
-                                                            <p className="text-slate-400 text-sm">Tap 'Edit Pattern' to map out your {shiftData.rotaConfig?.weeks || 6}-week recurring schedule and select an anchor date.</p>
-                                                        </div>
-                                                    )}
-
-                                                    {/* Calendar Section */}
-                                                    <div className="bg-slate-900/50 rounded-2xl p-4 border border-slate-800/50">
-                                                        <div className="flex justify-between items-center mb-4">
-                                                            <button 
-                                                                className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-white transition-colors disabled:opacity-30"
-                                                                onClick={() => { haptic('light'); setRotaMonthOffset(p => Math.max(-12, p - 1)); }}
-                                                                disabled={rotaMonthOffset <= -12}
-                                                            >
-                                                                <ChevronLeft size={16} />
-                                                            </button>
-                                                            <h4 className="text-white font-black text-lg uppercase tracking-wide">{monthName} {year}</h4>
-                                                            <button 
-                                                                className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-white transition-colors disabled:opacity-30"
-                                                                onClick={() => { haptic('light'); setRotaMonthOffset(p => Math.min(6, p + 1)); }}
-                                                                disabled={rotaMonthOffset >= 6}
-                                                            >
-                                                                <ChevronRight size={16} />
-                                                            </button>
-                                                        </div>
-
-                                                        <div className="grid grid-cols-7 gap-1 md:gap-2 mb-2">
-                                                            {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d, i) => (
-                                                                <div key={i} className="text-center text-xs font-bold text-slate-500">{d}</div>
-                                                            ))}
-                                                        </div>
-
-                                                        <div className="grid grid-cols-7 gap-1 md:gap-2">
-                                                            {days.map((d, idx) => {
-                                                                if (!d) return <div key={idx} className="aspect-square bg-slate-900/20 rounded-lg" />;
-                                                                
-                                                                const isToday = d.toDateString() === now.toDateString();
-                                                                const hours = getPlannedHours(d);
-                                                                const actualHours = getWorkedHoursForDate(d);
-                                                                const dStr = getLocalDateString(d);
-                                                                
-                                                                const targetDayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0).getTime();
-                                                                const targetDayEnd = targetDayStart + (24 * 60 * 60 * 1000) - 1;
-
-                                                                const matchingSummary = mergedShiftSummaries.find((summary: any) => {
-                                                                    const summaryClockInDate = summary.clockInTime 
-                                                                        ? getLocalDateString(new Date(summary.clockInTime)) 
-                                                                        : '';
-                                                                    const summaryNormDate = normalizeDateStr(summary.date);
-                                                                    return summaryClockInDate === dStr || summaryNormDate === dStr;
-                                                                });
-
-                                                                const hasWorked = (actualHours !== null && actualHours > 0) || !!matchingSummary;
-                                                                const override = shiftData.rotaOverrides?.[dStr];
-                                                                
-                                                                let ringClass = isToday ? 'ring-2 ring-sky-500' : '';
-                                                                let cellStyle = 'bg-slate-800/50 border border-slate-700';
-                                                                let textStyle = 'text-slate-400';
-                                                                
-                                                                if (hasWorked) {
-                                                                    cellStyle = 'bg-sky-500/10 border border-sky-500/40 shadow-inner';
-                                                                    textStyle = 'text-sky-300 font-extrabold';
-                                                                } else if (override && override !== 'work') {
-                                                                    if (override === 'holiday') {
-                                                                        cellStyle = 'bg-purple-500/15 border border-purple-500/35';
-                                                                        textStyle = 'text-purple-400 font-bold';
-                                                                    } else if (override === 'sick') {
-                                                                        cellStyle = 'bg-red-500/15 border border-red-500/35';
-                                                                        textStyle = 'text-red-400 font-bold';
-                                                                    } else if (override === 'off') {
-                                                                        cellStyle = 'bg-slate-900 border border-slate-800';
-                                                                        textStyle = 'text-slate-500';
-                                                                    }
-                                                                } else if (hours > 0) {
-                                                                    if (override === 'work') {
-                                                                        cellStyle = 'bg-amber-500/10 border border-amber-500/30';
-                                                                        textStyle = 'text-amber-400 font-bold';
-                                                                    } else {
-                                                                        cellStyle = 'bg-emerald-500/10 border border-emerald-500/30';
-                                                                        textStyle = 'text-emerald-400 font-bold';
-                                                                    }
-                                                                }
-                                                                
-                                                                return (
-                                                                    <button 
-                                                                        key={idx} 
-                                                                        onClick={() => {
-                                                                            haptic('light');
-                                                                            const todayStart = new Date();
-                                                                            todayStart.setHours(0, 0, 0, 0);
-                                                                            
-                                                                            const isFuture = d.getTime() >= todayStart.getTime();
-                                                                            if (isFuture && !hasWorked) {
-                                                                                setSelectedFutureDate(d);
-                                                                            } else {
-                                                                                if (hasWorked) {
-                                                                                    if (matchingSummary) {
-                                                                                        setViewingPastSummary(matchingSummary);
-                                                                                    } else if (shiftData.firstStartTime && !shiftData.isShiftFinalized) {
-                                                                                        const activeStart = shiftData.firstStartTime;
-                                                                                        const activeEnd = Date.now();
-                                                                                        if (Math.max(activeStart, targetDayStart) < Math.min(activeEnd, targetDayEnd)) {
-                                                                                            announce("This shift is currently active! Finalize your shift to view the full detail report.");
-                                                                                        } else {
-                                                                                            announce("No detailed summary found for this shift.");
-                                                                                        }
-                                                                                    } else {
-                                                                                        announce("No detailed summary found for this shift.");
-                                                                                    }
-                                                                                } else {
-                                                                                    announce("No shift was recorded on this past day.");
-                                                                                }
-                                                                            }
-                                                                        }}
-                                                                        className={`aspect-square rounded-lg flex items-center justify-center relative flex-col hover:brightness-125 transition-all text-center ${cellStyle} ${ringClass}`}
-                                                                    >
-                                                                        <span className={`text-xs md:text-sm leading-none ${textStyle} ${isToday && 'text-sky-400 font-extrabold'}`}>
-                                                                            {d.getDate()}
-                                                                        </span>
-                                                                        {hasWorked ? (
-                                                                            <span className="text-[8px] md:text-[9px] text-sky-400 font-mono font-black mt-1 leading-none flex items-center flex-col gap-0.5 animate-pulse">
-                                                                                <span>{matchingSummary?.totalCases || (isToday && !shiftData.isShiftFinalized ? (shiftData.totalCases || 0) : 0)}c</span>
-                                                                                <span>{matchingSummary?.steps ? `${Math.round(matchingSummary.steps)}s` : (actualHours ? `${actualHours}h` : '0h')}</span>
-                                                                            </span>
-                                                                        ) : override && override !== 'work' ? (
-                                                                            <span className={`text-[8px] md:text-[9px] font-bold mt-1 leading-none uppercase tracking-wide
-                                                                                ${override === 'holiday' ? 'text-purple-400' : override === 'sick' ? 'text-red-400' : 'text-slate-500'}`}
-                                                                            >
-                                                                                {override === 'holiday' ? 'Holiday' : override === 'sick' ? 'Sick' : 'Off'}
-                                                                            </span>
-                                                                        ) : (hours > 0) ? (
-                                                                            <span className={`text-[8px] md:text-[9px] font-mono font-bold mt-1 leading-none ${override === 'work' ? 'text-amber-500/80' : 'text-emerald-500/80'}`}>
-                                                                                {hoursToHHMM(hours > 0 ? hours : 8)}
-                                                                            </span>
-                                                                        ) : null}
-                                                                    </button>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    </div>
-
-                                                    {/* Stats block */}
-                                                    <div className="bg-slate-800/80 p-4 rounded-2xl flex justify-between items-center border border-slate-700/50 gap-2">
-                                                        <div className="flex-1">
-                                                            <div className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">Expected Shifts</div>
-                                                            <div className="text-white text-base md:text-lg font-black truncate">{totalShifts} <span className="text-xs font-normal text-slate-400 font-mono font-bold">/ {days.filter(x => x).length}</span></div>
-                                                        </div>
-                                                        <div className="flex-1 text-center border-x border-slate-700/50 px-2">
-                                                            <div className="text-[9px] text-sky-400 font-bold uppercase tracking-widest">Actual Worked</div>
-                                                            <div className="text-sky-400 text-base md:text-lg font-black truncate">
-                                                                {hoursToHHMM(days.reduce((sum, d) => sum + (d ? (getWorkedHoursForDate(d) || 0) : 0), 0))}
-                                                            </div>
-                                                        </div>
-                                                        <div className="flex-1 text-right">
-                                                            <div className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">Base Hours</div>
-                                                            <div className="text-white text-base md:text-lg font-black truncate">{hoursToHHMM(days.reduce((sum, d) => sum + (d ? getPlannedHours(d) : 0), 0))}</div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                /* Shift History Tab */
-                                                <div className="space-y-4">
-                                                    <div className="flex justify-between items-center mb-1">
-                                                        <div className="text-[10px] uppercase font-black tracking-widest text-slate-400">Last 6 Weeks of Picking Summaries</div>
-                                                        <button
-                                                            onClick={() => {
-                                                                haptic('medium');
-                                                                setRestoreText('');
-                                                                setRestoreStatus(null);
-                                                                setShowRestoreModal(true);
-                                                            }}
-                                                            className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-xl text-[10px] font-black tracking-wider uppercase transition-all flex items-center gap-1.5"
-                                                        >
-                                                            <RotateCcw size={12} /> Restore Shift
-                                                        </button>
-                                                    </div>
-                                                    {mergedShiftSummaries.length === 0 ? (
-                                                        <div className="text-center py-12 bg-slate-900/40 border border-slate-800/50 rounded-2xl text-slate-450 italic text-xs">
-                                                            No previous shift history found.
-                                                        </div>
-                                                    ) : (
-                                                        mergedShiftSummaries.map((summary, idx) => {
-                                                            let dt;
-                                                            if (summary.date) {
-                                                                dt = new Date(summary.date.includes('T') ? summary.date : `${summary.date}T12:00:00`);
-                                                            } else if (summary.clockInTime) {
-                                                                dt = new Date(summary.clockInTime);
-                                                            } else {
-                                                                dt = new Date();
-                                                            }
-                                                            return (
-                                                                <div key={`hist-${idx}`} className="bg-slate-900/60 p-4 rounded-2xl border border-slate-800 flex flex-col gap-3 hover:border-slate-700 transition-colors">
-                                                                    <div className="flex justify-between items-center pb-2 border-b border-slate-800">
-                                                                        <div>
-                                                                            <div className="font-extrabold text-xs text-slate-200">
-                                                                                {dt.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
-                                                                            </div>
-                                                                            <div className="text-[10px] text-slate-400 font-mono mt-0.5 flex gap-2">
-                                                                                <span>In: {summary.clockInTime ? new Date(summary.clockInTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--:--'}</span>
-                                                                                <span>•</span>
-                                                                                <span>Out: {summary.clockOutTime ? new Date(summary.clockOutTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : (summary.clockInTime && summary.totalSeconds ? new Date(summary.clockInTime + summary.totalSeconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--:--')}</span>
-                                                                            </div>
-                                                                        </div>
-                                                                        <div className="flex gap-2 items-center">
-                                                                            {(isUserAdmin() || (summary.userName || '').toUpperCase().trim() === (shiftData.operator || '').toUpperCase().trim()) && (
-                                                                                <button
-                                                                                    onClick={async () => {
-                                                                                        if(window.confirm("Are you sure you want to delete this shift summary?")) {
-                                                                                            const targetUser = summary.userName || shiftData.operator;
-                                                                                            const docId = summary.id || `${auth.currentUser?.uid || 'anon'}_${summary.clockInTime}`;
-                                                                                            const success = await deleteShiftSummary(docId, targetUser, summary.clockInTime);
-                                                                                            if (success) {
-                                                                                                haptic('medium');
-                                                                                                setShiftSummaries(prev => prev.filter(s => s.id !== summary.id && s.clockInTime !== summary.clockInTime));
-                                                                                                fetchShiftSummaries(targetUser, true).then(fresh => {
-                                                                                                    setShiftSummaries(fresh);
-                                                                                                });
-                                                                                            } else {
-                                                                                                haptic('heavy');
-                                                                                                alert("Failed to delete shift record. If you are not the owner or an admin, you cannot delete this record.");
-                                                                                            }
-                                                                                        }
-                                                                                    }}
-                                                                                    className="p-1 rounded-md bg-red-500/10 hover:bg-red-500/20 text-red-500 transition-colors"
-                                                                                >
-                                                                                    <Trash2 size={14} />
-                                                                                </button>
-                                                                            )}
-                                                                        </div>
-                                                                    </div>
-                                                                    
-                                                                    {(() => {
-                                                                        const depMap: any = {};
-                                                                        (summary.history || []).forEach((h: any) => {
-                                                                            if (h.gap === 'BREAK') return;
-                                                                            const dId = h.departmentName || h.department || 'Aisles';
-                                                                            if (!depMap[dId]) {
-                                                                                depMap[dId] = { cases: 0, seconds: 0 };
-                                                                            }
-                                                                            depMap[dId].cases += (h.cases || 0);
-                                                                            if (h.elapsedSeconds) {
-                                                                                depMap[dId].seconds += h.elapsedSeconds;
-                                                                            } else {
-                                                                                // Fallback calculation if rate is known but elapsedSeconds isn't
-                                                                                if(h.rate > 0) depMap[dId].seconds += ((h.cases/h.rate)*3600) || 0;
-                                                                            }
-                                                                        });
-                                                                        
-                                                                        const keys = Object.keys(depMap);
-                                                                        if (keys.length === 0) {
-                                                                             return (
-                                                                                 <div className="grid grid-cols-2 gap-3 text-center w-full">
-                                                                                     <div className="bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/50">
-                                                                                         <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Pick Rate</div>
-                                                                                         <div className="text-sm font-black text-white">{summary.finalRate || 0}</div>
-                                                                                     </div>
-                                                                                     <div className="bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/50">
-                                                                                         <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Total Cases</div>
-                                                                                         <div className="text-sm font-black text-white">{summary.totalCases || 0}</div>
-                                                                                     </div>
-                                                                                 </div>
-                                                                             );
-                                                                        }
-
-                                                                        return (
-                                                                            <div className="flex flex-col gap-2">
-                                                                                <div className="flex justify-between pb-1 border-b border-slate-800/50 px-1">
-                                                                                    <div className="text-[9px] uppercase font-bold text-slate-500 tracking-widest w-1/3 text-left">Department</div>
-                                                                                    <div className="text-[9px] uppercase font-bold text-slate-500 tracking-widest w-1/3 text-center">Cases</div>
-                                                                                    <div className="text-[9px] uppercase font-bold text-slate-500 tracking-widest w-1/3 text-right">Pick Rate</div>
-                                                                                </div>
-                                                                                {keys.map((k) => {
-                                                                                    const ms = depMap[k];
-                                                                                    const rt = ms.seconds > 0 ? Math.round(ms.cases / (ms.seconds / 3600)) : 0;
-                                                                                    return (
-                                                                                        <div key={k} className="flex justify-between items-center px-1">
-                                                                                            <div className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider w-1/3 text-left">{k}</div>
-                                                                                            <div className="text-xs font-black text-white w-1/3 text-center">{ms.cases}</div>
-                                                                                            <div className="text-xs font-black text-sky-400 w-1/3 text-right">{rt} <span className="text-[8px] text-slate-400 font-mono">P/H</span></div>
-                                                                                        </div>
-                                                                                    )
-                                                                                })}
-                                                                                <div className="grid grid-cols-2 gap-3 text-center w-full mt-2 pt-2 border-t border-slate-800/50">
-                                                                                    <div className="bg-slate-950/40 py-2 px-1 rounded-xl border border-slate-800/50">
-                                                                                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Active Time</div>
-                                                                                        <div className="text-[10px] font-black text-slate-350">{formatHHMM(summary.activeSeconds || 0)}</div>
-                                                                                    </div>
-                                                                                    <div className="bg-slate-950/40 py-2 px-1 rounded-xl border border-slate-800/50">
-                                                                                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Break Time</div>
-                                                                                        <div className="text-[10px] font-black text-slate-350">{formatHHMM(summary.breakSeconds || 0)}</div>
-                                                                                    </div>
-                                                                                </div>
-                                                                            </div>
-                                                                        )
-                                                                    })()}
-                                                                    
-                                                                    <button
-                                                                        onClick={() => { haptic('medium'); setViewingPastSummary(summary); }}
-                                                                        className="w-full mt-1.5 py-2.5 bg-slate-800 hover:bg-slate-750 text-sky-400 hover:text-sky-300 text-xs font-black tracking-widest rounded-xl border border-slate-800 transition-all flex items-center justify-center gap-1.5 uppercase font-mono"
-                                                                    >
-                                                                        <FileText size={13} /> View Full Shift Summary
-                                                                    </button>
-                                                                </div>
-                                                            );
-                                                        })
-                                                    )}
-                                                </div>
-                                            )
-                                        ) : (
-                                            /* Rota Edit Mode */
-                                            <div className="space-y-6">
-                                                <div className="text-slate-300 text-sm">
-                                                    Tap the days you are <b>scheduled to work</b> in your repeating cycle.
-                                                </div>
-                                                
-                                                <div className="space-y-4">
-                                                    <div className="p-4 bg-slate-800/50 border border-slate-700/50 rounded-2xl">
-                                                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Analyse Shift History</label>
-                                                        <textarea 
-                                                            placeholder="Paste a list of dates you worked (e.g. May 1, May 2...)"
-                                                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white h-20 focus:outline-none focus:border-sky-500 transition-colors mb-2"
-                                                            onChange={(e) => {
-                                                                // Placeholder for real-time validation if needed
-                                                            }}
-                                                        />
-                                                        <button 
-                                                            onClick={() => announce("I can help you deduce the pattern if you paste those dates in the chat!")}
-                                                            className="w-full py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors mb-3"
-                                                        >
-                                                            Detect Pattern Correctly
-                                                        </button>
-                                                        
-                                                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 border-t border-slate-700/50 pt-3">Custom Assistant Image URL</label>
-                                                        <input 
-                                                            type="text" 
-                                                            placeholder="Paste an image URL (PNG/JPG)"
-                                                            value={shiftData.assistantImage || ''}
-                                                            onChange={(e) => setShiftData({ ...shiftData, assistantImage: e.target.value })}
-                                                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500 transition-colors"
-                                                        />
-                                                        <p className="mt-2 text-[10px] text-slate-500 italic">Leave blank to keep the funny owl!</p>
-                                                    </div>
-
-                                                    {(shiftData.rotaConfig?.pattern || []).map((week: any[], wIdx: number) => (
-                                                        <div key={`w-${wIdx}`} className="bg-slate-900 rounded-xl p-3 border border-slate-800">
-                                                            <div className="text-xs font-bold text-slate-500 mb-2 uppercase">Week {wIdx + 1}</div>
-                                                            <div className="grid grid-cols-7 gap-1">
-                                                                {week.map((val: any, dIdx: number) => {
-                                                                    const hours = typeof val === 'number' ? val : (val ? 8 : 0);
-                                                                    const working = hours > 0;
-                                                                    return (
-                                                                        <button
-                                                                            key={`wd-${wIdx}-${dIdx}`}
-                                                                            onClick={() => handleTogglePatternDay(wIdx, dIdx)}
-                                                                            className={`aspect-square rounded-lg font-bold text-[10px] transition-colors flex flex-col items-center justify-center p-0.5
-                                                                                ${working ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
-                                                                        >
-                                                                            <span className="font-bold leading-tight">{['M', 'T', 'W', 'T', 'F', 'S', 'S'][dIdx]}</span>
-                                                                            <span className={`text-[8px] font-mono leading-tight ${working ? 'text-white/80' : 'text-slate-500'}`}>
-                                                                                {working ? `${hours}h` : 'Off'}
-                                                                            </span>
-                                                                        </button>
-                                                                    );
-                                                                })}
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-
-                                                <div className="pt-4 border-t border-slate-800">
-                                                    <div className="text-xs font-bold text-slate-500 mb-2 uppercase">Anchor Date Setting</div>
-                                                    <p className="text-[10px] text-slate-400 mb-4 whitespace-normal">
-                                                        To align this recurring pattern with real life dates, set an Anchor Date. This date will represent <b>Monday of Week 1</b>.
-                                                    </p>
-                                                    
-                                                    {shiftData.rotaConfig?.anchorDate ? (
-                                                        <div className="flex justify-between items-center bg-slate-900 p-3 rounded-xl border border-slate-800">
-                                                            <span className="text-emerald-400 font-bold font-mono">{shiftData.rotaConfig.anchorDate}</span>
-                                                            <input 
-                                                                type="date" 
-                                                                value={shiftData.rotaConfig.anchorDate}
-                                                                onChange={(e) => setShiftData((prev: any) => ({
-                                                                    ...prev,
-                                                                    rotaConfig: { ...prev.rotaConfig, anchorDate: e.target.value }
-                                                                }))}
-                                                                className="bg-slate-800 text-white text-xs px-2 py-1 rounded"
-                                                            />
-                                                        </div>
-                                                    ) : (
-                                                        <button
-                                                            onClick={handleSetAnchor}
-                                                            className="w-full py-3 bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded-xl font-bold shadow-lg"
-                                                        >
-                                                            Set Anchor Date (Current Week)
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Future Rota Date Overrides Modal */}
-                            <RotaOverrideModal
-                                selectedFutureDate={selectedFutureDate}
-                                onClose={() => setSelectedFutureDate(null)}
-                                onSelectOverride={handleSetDayOverride}
-                            />
-
-                            {/* Historical Shift Detail Modal */}
-                            <HistoricalShiftModal
-                                viewingPastSummary={viewingPastSummary}
-                                onClose={() => setViewingPastSummary(null)}
-                                shiftData={shiftData}
-                                isUserAdmin={isUserAdmin}
-                                storedShiftPhotos={storedShiftPhotos}
-                                setShiftSummaries={setShiftSummaries}
-                                setViewingPastSummary={setViewingPastSummary}
-                                setViewingLabels={setViewingLabels}
-                                editingOrderIndex={editingOrderIndex}
-                                setEditingOrderIndex={setEditingOrderIndex}
-                                editingOrderLabel={editingOrderLabel}
-                                setEditingOrderLabel={setEditingOrderLabel}
-                                handleSavePastOrderLabel={handleSavePastOrderLabel}
-                            />
-
-                            {/* Restore Shift Modal */}
-                            <RestoreShiftModal
-                                isOpen={showRestoreModal}
-                                onClose={() => setShowRestoreModal(false)}
-                                restoreText={restoreText}
-                                setRestoreText={setRestoreText}
-                                restoreStatus={restoreStatus}
-                                setRestoreStatus={setRestoreStatus}
-                                operator={shiftData.operator || 'DASERGHIE'}
-                                onShiftRestored={(fresh) => setShiftSummaries(fresh)}
-                            />
-                        </>
-                    );
-                })()}
-
-                    {/* PIN Modal */}
-                    <AdminPinModal
-                        isOpen={pinModal.show}
-                        type={pinModal.type}
-                        input={pinModal.input}
-                        onInputChange={(newInput) => setPinModal({ ...pinModal, input: newInput })}
-                        onClose={() => setPinModal({ ...pinModal, show: false, input: '' })}
+                        manualStart={manualStart}
+                        manualEnd={manualEnd}
+                        showLeaderboard={showLeaderboard}
+                        setShowLeaderboard={setShowLeaderboard}
+                        fetchingLeaderboard={fetchingLeaderboard}
+                        fetchLeaderboardManual={fetchLeaderboardManual}
+                        leaderboardTab={leaderboardTab}
+                        setLeaderboardTab={setLeaderboardTab}
+                        allShiftSummariesList={allShiftSummariesList}
+                        adminAllSummaries={adminAllSummaries}
+                        shiftSummaries={shiftSummaries}
+                        zoneXP={zoneXP}
+                        liveUsers={liveUsers}
+                        leaderboardData={leaderboardData}
+                        userProfile={userProfile}
+                        showToast={showToast}
+                        viewingLabels={viewingLabels}
+                        setViewingLabels={setViewingLabels}
+                        showRota={showRota}
+                        setShowRota={setShowRota}
+                        shiftData={shiftData}
+                        setShiftData={setShiftData}
+                        mergedShiftSummaries={mergedShiftSummaries}
+                        setShiftSummaries={setShiftSummaries}
+                        fetchShiftSummaries={fetchShiftSummaries}
+                        isUserAdmin={isUserAdmin}
+                        announce={announce}
+                        viewingPastSummary={viewingPastSummary}
+                        setViewingPastSummary={setViewingPastSummary}
+                        showRestoreModal={showRestoreModal}
+                        setShowRestoreModal={setShowRestoreModal}
+                        restoreText={restoreText}
+                        setRestoreText={setRestoreText}
+                        restoreStatus={restoreStatus}
+                        setRestoreStatus={setRestoreStatus}
+                        selectedFutureDate={selectedFutureDate}
+                        setSelectedFutureDate={setSelectedFutureDate}
+                        handleSetDayOverride={handleSetDayOverride}
+                        storedShiftPhotos={storedShiftPhotos}
+                        editingOrderIndex={editingOrderIndex}
+                        setEditingOrderIndex={setEditingOrderIndex}
+                        editingOrderLabel={editingOrderLabel}
+                        setEditingOrderLabel={setEditingOrderLabel}
+                        handleSavePastOrderLabel={handleSavePastOrderLabel}
+                        pinModal={pinModal}
+                        setPinModal={setPinModal}
                     />
                 {activeScreen === 1 && (
                     <div id="screen-performance" className="h-full flex flex-col">
@@ -6602,6 +3929,24 @@ export default function App() {
                 }}
             />
 
+            {/* Shift Notification Hub Modal */}
+            <NotificationHubModal
+                isOpen={showNotificationHub}
+                onClose={() => setShowNotificationHub(false)}
+                notifications={shiftNotifications}
+                onMarkAsRead={handleMarkNotificationAsRead}
+                onMarkAllAsRead={handleMarkAllNotificationsAsRead}
+                onClearAll={handleClearAllNotifications}
+                onSendInteractionReply={async (recipient, type) => {
+                    const sender = (shiftData.operator || userProfile?.username || 'Teammate').toUpperCase().trim();
+                    const res = await sendSocialInteraction(sender, recipient, type);
+                    if (res && res.message) {
+                        showToast(res.message, "success");
+                    }
+                }}
+                currentOperator={(shiftData.operator || userProfile?.username || '').toUpperCase().trim()}
+            />
+
             <VoiceAssistant 
                 isActive={shiftData.voiceEnabled} 
                 onToggle={toggleVoice}
@@ -6642,6 +3987,17 @@ export default function App() {
                 <InteractionToast 
                     interaction={activeInteraction} 
                     onDismiss={() => setActiveInteraction(null)} 
+                    onOpenHub={() => {
+                        setActiveInteraction(null);
+                        setShowNotificationHub(true);
+                    }}
+                    onQuickReply={async (recipient, type) => {
+                        const sender = (shiftData.operator || userProfile?.username || 'Teammate').toUpperCase().trim();
+                        const res = await sendSocialInteraction(sender, recipient, type);
+                        if (res && res.message) {
+                            showToast(res.message, "success");
+                        }
+                    }}
                 />
                 <AnimatePresence>
                     {toast && (

@@ -8,7 +8,7 @@
  */
 
 const DB_NAME = 'PickAppLocalDB';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 export const STORES = {
   ROTAS: 'rotas',
@@ -16,7 +16,8 @@ export const STORES = {
   SYSTEM_CONFIG: 'systemConfig',
   SHIFT_HISTORY: 'shiftHistory',
   LABEL_PHOTOS: 'labelPhotos',
-  ACTIVE_SHIFTS: 'activeShifts'
+  ACTIVE_SHIFTS: 'activeShifts',
+  NOTIFICATIONS: 'notifications'
 } as const;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -67,6 +68,14 @@ export const initLocalDB = (): Promise<IDBDatabase> => {
       // 6. Active Shift State (Protects in-flight shift from quota errors)
       if (!db.objectStoreNames.contains(STORES.ACTIVE_SHIFTS)) {
         db.createObjectStore(STORES.ACTIVE_SHIFTS, { keyPath: 'operator' });
+      }
+
+      // 7. Shift Notifications & Peer Interactions
+      if (!db.objectStoreNames.contains(STORES.NOTIFICATIONS)) {
+        const notifStore = db.createObjectStore(STORES.NOTIFICATIONS, { keyPath: 'id' });
+        notifStore.createIndex('operator', 'operator', { unique: false });
+        notifStore.createIndex('timestamp', 'timestamp', { unique: false });
+        notifStore.createIndex('category', 'category', { unique: false });
       }
     };
 
@@ -314,6 +323,68 @@ export async function getLocalPhotos(userName: string, date?: string): Promise<a
 }
 
 /**
+ * Save a shift notification / peer interaction to IndexedDB
+ */
+export async function saveLocalNotification(notification: any): Promise<void> {
+  if (!notification || !notification.id) return;
+  const item = {
+    ...notification,
+    operator: (notification.operator || 'DEFAULT').toUpperCase().trim(),
+    timestamp: notification.timestamp || Date.now(),
+    isRead: !!notification.isRead
+  };
+  await saveLocalItem(STORES.NOTIFICATIONS, item);
+}
+
+/**
+ * Retrieve shift notifications for an operator from IndexedDB
+ */
+export async function getLocalNotifications(userName: string): Promise<any[]> {
+  if (!userName) return [];
+  const safeName = userName.toUpperCase().trim();
+  const list = await getAllLocalItems<any>(STORES.NOTIFICATIONS, 'operator', safeName);
+  // Sort descending by timestamp
+  return (list || []).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+}
+
+/**
+ * Mark notification as read in IndexedDB
+ */
+export async function markNotificationAsRead(id: string): Promise<void> {
+  if (!id) return;
+  const notif = await getLocalItem<any>(STORES.NOTIFICATIONS, id);
+  if (notif) {
+    notif.isRead = true;
+    await saveLocalItem(STORES.NOTIFICATIONS, notif);
+  }
+}
+
+/**
+ * Mark all notifications as read for an operator
+ */
+export async function markAllNotificationsAsRead(userName: string): Promise<void> {
+  if (!userName) return;
+  const list = await getLocalNotifications(userName);
+  for (const notif of list) {
+    if (!notif.isRead) {
+      notif.isRead = true;
+      await saveLocalItem(STORES.NOTIFICATIONS, notif);
+    }
+  }
+}
+
+/**
+ * Clear notifications for an operator
+ */
+export async function clearLocalNotifications(userName: string): Promise<void> {
+  if (!userName) return;
+  const list = await getLocalNotifications(userName);
+  for (const notif of list) {
+    await deleteLocalItem(STORES.NOTIFICATIONS, notif.id);
+  }
+}
+
+/**
  * One-time silent migration from bloated localStorage to IndexedDB
  */
 export async function migrateLocalStorageToIndexedDB(): Promise<void> {
@@ -357,11 +428,18 @@ export async function migrateLocalStorageToIndexedDB(): Promise<void> {
       }
     }
 
-    // Clean up bloated legacy items from localStorage
+    // Clean up bloated legacy items and historical shift dumps from localStorage now that IndexedDB handles them
     const keysToPrune = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && (k.startsWith('pickData_corrupted_') || k.startsWith('failed_order_uploads') || k.startsWith('draft_'))) {
+      if (k && (
+        k.startsWith('pickData_corrupted_') ||
+        k.startsWith('failed_order_uploads') ||
+        k.startsWith('draft_') ||
+        k.startsWith('temp_') ||
+        k.startsWith('offline_shifts_') ||
+        k.includes('_corrupted_')
+      )) {
         keysToPrune.push(k);
       }
     }

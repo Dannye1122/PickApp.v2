@@ -154,3 +154,47 @@ export interface SocialInteraction {
   createdAt: string;
   isRead?: boolean;
 }
+
+export interface LiveUser {
+    name: string;
+    department?: string;
+    zone?: string;
+    xp?: number;
+    cases?: number;
+    rate?: number;
+    [key: string]: any;
+}
+
+export interface ShiftSummary {
+  id?: string;
+  userId: string;
+  userName: string;
+  department: string;
+  zone: string;
+  totalCases: number;
+  finalRate: number;
+  activeSeconds: number;
+  totalSeconds: number;
+  breakSeconds?: number;
+  date?: string;
+  clockInTime?: number;
+  clockOutTime?: number;
+  history?: any[];
+  steps?: number;
+}
+
+
+export type NotificationCategory = 'peer' | 'milestone' | 'broadcast' | 'system';
+
+export interface ShiftNotification {
+  id: string;
+  operator: string;
+  category: NotificationCategory;
+  title: string;
+  message: string;
+  timestamp: number;
+  isRead: boolean;
+  interactionType?: InteractionType;
+  senderName?: string;
+  data?: Record<string, any>;
+}

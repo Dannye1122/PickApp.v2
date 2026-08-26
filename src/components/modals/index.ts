@@ -9,4 +9,10 @@ export * from './CaseUnlockModal';
 export * from './ConfirmDialogModal';
 export * from './InstallTutorialModal';
 export * from './LabelPhotoModal';
+export * from './NotificationHubModal';
+export * from './LeaderboardModal';
+export * from './RotaModal';
+export * from './SettingsModal';
+export * from './HistoryLeaderboardOverlays';
+
 

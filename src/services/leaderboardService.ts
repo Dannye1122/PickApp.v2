@@ -20,7 +20,7 @@ import {
 import { db, auth } from '../lib/firebase';
 import { normalizeDateKey } from '../utils/dateUtils';
 import { initializeApp, deleteApp } from 'firebase/app';
-import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { canFetchData, getCachedData, setCachedData, markDataFetched, markQuotaExceeded, isQuotaExceeded } from '../utils/quotaManager';
 import { STORES, getLocalItem, saveLocalItem, saveLocalItems, getAllLocalItems, deleteLocalItem, saveLocalRota, saveLocalShiftSummaries, getLocalShiftSummaries } from './indexedDbService';
@@ -1282,8 +1282,25 @@ export const createUserWithAuthAndProfile = async (username: string, pin: string
     // Initialize a separate app instance to create user without affecting current administrator login session
     secondaryApp = initializeApp(firebaseConfig, 'SecondaryUserCreationApp');
     const secondaryAuth = getAuth(secondaryApp);
-    const authResult = await createUserWithEmailAndPassword(secondaryAuth, email, authPin);
-    const uid = authResult.user.uid;
+    
+    let uid = '';
+    try {
+      const authResult = await createUserWithEmailAndPassword(secondaryAuth, email, authPin);
+      uid = authResult.user.uid;
+    } catch (authErr: any) {
+      if (authErr.code === 'auth/email-already-in-use') {
+        // Self-Healing Recovery Flow:
+        // Try to sign in to verify credentials. If the PIN matches, we retrieve their existing UID and restore their Firestore profile!
+        try {
+          const signInResult = await signInWithEmailAndPassword(secondaryAuth, email, authPin);
+          uid = signInResult.user.uid;
+        } catch (signInErr: any) {
+          throw new Error('User already exists in Authentication with a different PIN. To restore or edit this user, please use their existing PIN.');
+        }
+      } else {
+        throw authErr;
+      }
+    }
     
     // Save profile with this registration UID
     const homeDept = getUserHomeDepartment(userUpper);
@@ -1427,13 +1444,14 @@ export const subscribeToAllShiftSummaries = (callback: (summaries: ShiftSummary[
 export const sendSocialInteraction = async (
     senderName: string,
     receiverName: string,
-    type: 'poke' | 'thumbs_up' | 'congrats' | 'tease'
+    type: 'poke' | 'thumbs_up' | 'congrats' | 'tease',
+    customText?: string
 ): Promise<{ success: boolean; message: string }> => {
     const defaultMessages: Record<string, string> = {
-        poke: `👉 ${senderName} poked you! Keep the pace!`,
-        thumbs_up: `👍 ${senderName} gave you a thumbs up! Great picking!`,
-        congrats: `👏 ${senderName} congratulated you on dominating the leaderboard!`,
-        tease: `😏 ${senderName}: Catch me if you can on the boards!`
+        poke: customText || `👉 ${senderName} poked you! Keep the pace!`,
+        thumbs_up: customText || `👍 ${senderName} gave you a thumbs up! Great picking!`,
+        congrats: customText || `👏 ${senderName} congratulated you on dominating the leaderboard!`,
+        tease: customText || `😏 ${senderName}: Catch me if you can on the boards!`
     };
 
     const interaction = {

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Briefcase, FileText, AlertCircle } from 'lucide-react';
 import { ShiftSummary } from '../services/leaderboardService';
 import { fetchShiftSummaries } from '../services/leaderboardService';
-import { DASERGHIE_ROTA } from '../App'; // Need to make this accessible if possible
+import { DASERGHIE_ROTA } from '../contexts/ShiftDataContext';
 import { getLocalDateString } from '../services/leaderboardService';
 
 // Redefining rota pattern for access here to avoid cycle dependencies if needed, 
