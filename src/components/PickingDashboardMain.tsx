@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion } from 'motion/react';
 import { 
-    Zap, Flame, Coffee, Trophy, Clock, FileText, Play, Square, Award, Download, CheckCircle, Camera
+    Zap, Flame, Coffee, Trophy, Clock, FileText, Play, Square, Award, Download, CheckCircle, Camera, AlertCircle
 } from 'lucide-react';
 import { PickingDashboard } from './PickingDashboard';
 import { MetricCard } from './stats/MetricCard';

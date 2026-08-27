@@ -150,7 +150,7 @@ export const HistoricalShiftModal: React.FC<HistoricalShiftModalProps> = ({
                                         <div className={`bg-slate-950/50 p-3 rounded-2xl border ${viewingPastSummary.isBreakModified ? 'border-amber-500/50' : 'border-slate-800/80'}`}>
                                             <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center justify-between gap-1.5">
                                                 <span className="flex items-center gap-1.5"><Coffee size={10}/> Break Time</span>
-                                                {(isUserAdmin() || (viewingPastSummary.userName || '').toUpperCase().trim() === (viewingPastSummary.userName || '').toUpperCase().trim()) && !editingBreak && (
+                                                {(isUserAdmin() || (viewingPastSummary.userName || '').toUpperCase().trim() === (shiftData.operator || '').toUpperCase().trim()) && !editingBreak && (
                                                     <button onClick={() => setEditingBreak(true)} className="text-sky-400 hover:text-sky-300">
                                                         <Edit2 size={10} />
                                                     </button>
