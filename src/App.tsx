@@ -32,7 +32,7 @@ import {
     getWarehouseSettings, getGlobalSettings, saveGlobalSettings, subscribeToWarehouseContext, 
     setWarehouseContext, deleteShiftSummary, getDatabaseStorageStats, stripOldImagesFromDatabase, 
     DBStorageStats, deleteUser, saveBetaFeedback, subscribeToLeaderboard, subscribeToLiveUsers,
-    sendSocialInteraction
+    sendSocialInteraction, handleFirestoreError, OperationType
 } from './services/leaderboardService';
 import { 
     getLocalRota, saveLocalRota, getAllLocalItems, STORES, migrateLocalStorageToIndexedDB, 
@@ -1448,9 +1448,9 @@ export default function App() {
                 if (allSummaries && allSummaries.length > 0) {
                     setAllShiftSummariesList(allSummaries);
                 }
-            }).catch(e => console.warn("All shift summaries fetch error:", e));
+            }).catch(e => handleFirestoreError(e, OperationType.LIST, 'shift_summaries'));
         } catch (e) {
-            console.error("Leaderboard fetch failed", e);
+            handleFirestoreError(e, OperationType.LIST, 'leaderboard');
         } finally {
             setFetchingLeaderboard(false);
         }
@@ -1463,7 +1463,7 @@ export default function App() {
             const summaries = await fetchShiftSummaries(shiftData.operator, force);
             setShiftSummaries(summaries);
         } catch (e) {
-            console.error("Summaries fetch failed", e);
+            handleFirestoreError(e, OperationType.LIST, 'shift_summaries');
         } finally {
             setFetchingSummaries(false);
         }
@@ -1475,7 +1475,7 @@ export default function App() {
             const summaries = await fetchAllShiftSummaries(force);
             setAdminAllSummaries(summaries);
         } catch (e) {
-            console.error("Admin summaries fetch failed", e);
+            handleFirestoreError(e, OperationType.LIST, 'shift_summaries');
         }
     }, [firebaseUser?.uid, userProfile]);
 

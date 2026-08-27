@@ -1439,7 +1439,7 @@ export const saveBetaFeedback = async (uid: string, username: string, feedbackDa
     });
     return true;
   } catch (error) {
-    console.error("Error saving beta feedback:", error);
+    handleFirestoreError(error, OperationType.WRITE, 'beta_feedback_logs');
     return false;
   }
 };
@@ -1459,7 +1459,7 @@ export const getBetaFeedbackLogs = async (force: boolean = false) => {
     setCachedData(cacheKey, logs);
     return logs;
   } catch (error) {
-    console.error("Error fetching beta feedback:", error);
+    handleFirestoreError(error, OperationType.LIST, 'beta_feedback_logs');
     return getCachedData<any[]>(cacheKey) || [];
   }
 };

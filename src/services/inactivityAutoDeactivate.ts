@@ -3,6 +3,7 @@ import { db } from '../lib/firebase';
 import { UserRole } from '../types';
 import { sendInactivityNotification } from './notificationService';
 import { saveLocalNotification } from './indexedDbService';
+import { handleFirestoreError, OperationType } from './leaderboardService';
 
 export const INACTIVITY_WARNING_MS = 4 * 24 * 60 * 60 * 1000; // 4 days (1 day before 5 days)
 export const INACTIVITY_DEACTIVATE_MS = 5 * 24 * 60 * 60 * 1000; // 5 days
@@ -52,7 +53,7 @@ export const processUserInactivity = async (user: any): Promise<InactivityCheckR
                     deactivationReason: `Auto-deactivated after ${daysInactive} days of inactivity`
                 }, { merge: true });
             } catch (err) {
-                console.error(`Failed to update Firestore deactivation for ${user.uid}`, err);
+                handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
             }
 
             // Create notification log
@@ -109,7 +110,7 @@ export const processUserInactivity = async (user: any): Promise<InactivityCheckR
                     lastWarningTimestamp: now
                 }, { merge: true });
             } catch (err) {
-                console.error(`Failed to record warning timestamp for ${user.uid}`, err);
+                handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
             }
 
             return { user: updatedUser, status: 'warning_sent', daysInactive };
