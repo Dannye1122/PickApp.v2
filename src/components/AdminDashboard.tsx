@@ -77,6 +77,11 @@ export const AdminDashboard = ({
     const [editIsActive, setEditIsActive] = useState(true);
     const [savingEdit, setSavingEdit] = useState(false);
     
+    // Validation Error states
+    const [newUserNameError, setNewUserNameError] = useState<string | null>(null);
+    const [newUserPinError, setNewUserPinError] = useState<string | null>(null);
+    const [editPinError, setEditPinError] = useState<string | null>(null);
+    
     // Warehouse settings state
     const [warehouseConfig, setWarehouseConfig] = useState<WarehouseSettings | null>(null);
     const [savingMetrics, setSavingMetrics] = useState(false);
@@ -203,16 +208,26 @@ export const AdminDashboard = ({
     }, [usersList, searchQuery]);
 
     const handleCreateUser = useCallback(async () => {
+        let hasError = false;
         if (newUserName.length < 3) {
             haptic('medium');
+            setNewUserNameError('Username must be at least 3 letters');
             triggerToast('Username must be at least 3 letters', 'error');
-            return;
+            hasError = true;
+        } else {
+            setNewUserNameError(null);
         }
+
         if (newUserPin.length !== 6) {
             haptic('medium');
+            setNewUserPinError('PIN must be exactly 6 digits');
             triggerToast('PIN must be exactly 6 digits', 'error');
-            return;
+            hasError = true;
+        } else {
+            setNewUserPinError(null);
         }
+
+        if (hasError) return;
 
         setRegistering(true);
         haptic('heavy');
@@ -221,6 +236,8 @@ export const AdminDashboard = ({
             triggerToast(`User ${newUserName.toUpperCase()} created successfully!`, 'success');
             setNewUserName('');
             setNewUserPin('');
+            setNewUserNameError(null);
+            setNewUserPinError(null);
             // Reset search query and refresh list immediately
             setSearchQuery('');
             await handleManualRefresh();
@@ -229,7 +246,7 @@ export const AdminDashboard = ({
         } finally {
             setRegistering(false);
         }
-    }, [newUserName, newUserPin, triggerToast, handleManualRefresh]);
+    }, [newUserName, newUserPin, triggerToast, handleManualRefresh, isGlobalView, currentWarehouseId]);
 
     const handleDeleteUser = async (uid: string, name: string) => {
         if (!window.confirm(`Are you absolutely sure you want to delete user "${name}"?`)) {
@@ -279,15 +296,18 @@ export const AdminDashboard = ({
         setEditWarehouse(user.warehouseId || 'MAIN');
         setEditDepartment(user.department || 'aisles');
         setEditIsActive(user.isActive !== false);
+        setEditPinError(null);
     };
 
     const handleSaveUserEdit = async () => {
         if (!editingUser) return;
         if (editPin && editPin.length !== 6) {
             haptic('medium');
+            setEditPinError('PIN must be exactly 6 digits');
             triggerToast('PIN must be exactly 6 digits', 'error');
             return;
         }
+        setEditPinError(null);
 
         setSavingEdit(true);
         haptic('heavy');
@@ -572,29 +592,59 @@ export const AdminDashboard = ({
                         <div className="space-y-3">
                             <label className="text-[11px] font-black text-slate-500 uppercase tracking-widest pl-2 mb-1.5 block leading-none">Username</label>
                             <div className="relative group">
-                                <User className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-600 group-focus-within:text-rose-400 transition-colors" size={16} />
+                                <User className={`absolute left-4 top-1/2 -translate-y-1/2 transition-colors ${newUserNameError ? 'text-rose-500' : 'text-slate-600 group-focus-within:text-rose-400'}`} size={16} />
                                 <input 
                                     type="text" 
                                     value={newUserName}
-                                    onChange={(e) => setNewUserName(e.target.value.toUpperCase())}
-                                    className="w-full p-5 pl-12 rounded-[24px] bg-slate-950 border border-slate-800 text-white font-bold outline-none focus:border-rose-500/50 transition-colors placeholder:text-slate-600 uppercase text-sm"
+                                    onChange={(e) => {
+                                        const val = e.target.value.toUpperCase();
+                                        setNewUserName(val);
+                                        if (val.length >= 3) {
+                                            setNewUserNameError(null);
+                                        } else {
+                                            setNewUserNameError('Username must be at least 3 letters');
+                                        }
+                                    }}
+                                    className={`w-full p-5 pl-12 rounded-[24px] bg-slate-950 border text-white font-bold outline-none transition-colors placeholder:text-slate-600 uppercase text-sm ${
+                                        newUserNameError ? 'border-rose-500/80 focus:border-rose-500 shadow-lg shadow-rose-950/10' : 'border-slate-800 focus:border-rose-500/50'
+                                    }`}
                                     placeholder="ENTER USERNAME"
                                 />
                             </div>
+                            {newUserNameError && (
+                                <p className="text-[10px] font-bold text-rose-400 pl-2 flex items-center gap-1 uppercase tracking-wider">
+                                    <span>⚠️</span> {newUserNameError}
+                                </p>
+                            )}
                         </div>
                         <div className="space-y-3">
                             <label className="text-[11px] font-black text-slate-500 uppercase tracking-widest pl-2 mb-1.5 block leading-none">6-Digit PIN</label>
                             <div className="relative group">
-                                <Fingerprint className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-600 group-focus-within:text-sky-400 transition-colors" size={16} />
+                                <Fingerprint className={`absolute left-4 top-1/2 -translate-y-1/2 transition-colors ${newUserPinError ? 'text-rose-500' : 'text-slate-600 group-focus-within:text-sky-400'}`} size={16} />
                                 <input 
                                     type="text" 
                                     maxLength={6}
                                     value={newUserPin}
-                                    onChange={(e) => setNewUserPin(e.target.value.replace(/[^0-9]/g, ''))}
-                                    className="w-full p-5 pl-12 rounded-[24px] bg-slate-950 border border-slate-800 text-white font-black tracking-[0.25em] outline-none focus:border-rose-500/50 transition-colors placeholder:text-slate-600 placeholder:tracking-normal placeholder:font-normal text-sm"
+                                    onChange={(e) => {
+                                        const val = e.target.value.replace(/[^0-9]/g, '');
+                                        setNewUserPin(val);
+                                        if (val.length === 6) {
+                                            setNewUserPinError(null);
+                                        } else {
+                                            setNewUserPinError('PIN must be exactly 6 digits');
+                                        }
+                                    }}
+                                    className={`w-full p-5 pl-12 rounded-[24px] bg-slate-950 border text-white font-black tracking-[0.25em] outline-none transition-colors placeholder:text-slate-600 placeholder:tracking-normal placeholder:font-normal text-sm ${
+                                        newUserPinError ? 'border-rose-500/80 focus:border-rose-500 shadow-lg shadow-rose-950/10' : 'border-slate-800 focus:border-rose-500/50'
+                                    }`}
                                     placeholder="ENTER 6-DIGIT PIN"
                                 />
                             </div>
+                            {newUserPinError && (
+                                <p className="text-[10px] font-bold text-rose-400 pl-2 flex items-center gap-1 uppercase tracking-wider">
+                                    <span>⚠️</span> {newUserPinError}
+                                </p>
+                            )}
                         </div>
                         <button 
                             disabled={registering}
@@ -1224,16 +1274,31 @@ export const AdminDashboard = ({
                                             6-Digit Security PIN
                                         </label>
                                         <div className="relative">
-                                            <Fingerprint className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+                                            <Fingerprint className={`absolute left-3.5 top-1/2 -translate-y-1/2 transition-colors ${editPinError ? 'text-rose-500' : 'text-slate-500'}`} size={16} />
                                             <input 
                                                 type="text" 
                                                 maxLength={6}
                                                 value={editPin}
-                                                onChange={(e) => setEditPin(e.target.value.replace(/[^0-9]/g, ''))}
-                                                className="w-full bg-slate-950 border border-slate-800 rounded-2xl py-3 pl-11 pr-4 text-white font-mono font-bold tracking-[0.2em] outline-none focus:border-sky-500 text-sm"
+                                                onChange={(e) => {
+                                                    const val = e.target.value.replace(/[^0-9]/g, '');
+                                                    setEditPin(val);
+                                                    if (val.length === 6) {
+                                                        setEditPinError(null);
+                                                    } else {
+                                                        setEditPinError('PIN must be exactly 6 digits');
+                                                    }
+                                                }}
+                                                className={`w-full bg-slate-950 border rounded-2xl py-3 pl-11 pr-4 text-white font-mono font-bold tracking-[0.2em] outline-none text-sm transition-all duration-200 ${
+                                                    editPinError ? 'border-rose-500/80 focus:border-rose-500 shadow-lg shadow-rose-950/20' : 'border-slate-800 focus:border-sky-500'
+                                                }`}
                                                 placeholder="6-DIGIT PIN"
                                             />
                                         </div>
+                                        {editPinError && (
+                                            <p className="text-[10px] font-bold text-rose-400 mt-1.5 pl-1 flex items-center gap-1 uppercase tracking-wider">
+                                                <span>⚠️</span> {editPinError}
+                                            </p>
+                                        )}
                                     </div>
 
                                     {/* Role & Status */}
@@ -1334,7 +1399,7 @@ export const AdminDashboard = ({
                         initial={{ opacity: 0, y: 50, scale: 0.9 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 20, scale: 0.9 }}
-                        className="fixed bottom-6 left-4 right-4 z-[999] max-w-sm mx-auto shadow-2xl pointer-events-none"
+                        className="fixed bottom-6 left-4 right-4 z-[100000] max-w-sm mx-auto shadow-2xl pointer-events-none"
                     >
                         <div className={`p-4 rounded-2xl flex items-center gap-3 backdrop-blur-xl ${statusToast.type === 'success' ? 'bg-emerald-950/95 border border-emerald-500/30 text-emerald-300' : 'bg-rose-950/95 border border-rose-500/30 text-rose-300'}`}>
                             <CheckCircle size={18} className={statusToast.type === 'success' ? 'text-emerald-400' : 'text-rose-400'} />

@@ -339,6 +339,28 @@ class ShiftCacheService {
         photos.push(d.data() as ShiftPhotoRecord);
       });
 
+      // Local IndexedDB fallback so label pictures are never lost
+      if (photos.length === 0) {
+        try {
+          const { getLocalPhotos } = await import('./indexedDbService');
+          const localPhotos = await getLocalPhotos(currentName, normDate);
+          if (localPhotos && localPhotos.length > 0) {
+            localPhotos.forEach(p => {
+              photos.push({
+                photoId: p.id,
+                shiftDate: p.date,
+                userName: p.userName,
+                blob: p.blob,
+                orderIndex: p.orderIndex || 0,
+                type: p.type || 'label'
+              });
+            });
+          }
+        } catch (err) {
+          console.warn('IndexedDB photo fallback fetch failed:', err);
+        }
+      }
+
       this.photoCache.set(photoKey, photos);
       return photos;
     } catch (e) {

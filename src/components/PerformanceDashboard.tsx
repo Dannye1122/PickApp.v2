@@ -340,14 +340,25 @@ export const PerformanceDashboard = ({
                                 <div className="w-16 text-right">P/H</div>
                             </div>
                             {/* Table Content */}
-                            {allAdminSummaries.map((s: any) => (
-                                <div key={s.id} className="flex justify-between items-center bg-slate-900/50 border border-slate-800/30 p-2 rounded-xl text-[11px]">
-                                    <div className="flex-1 font-bold text-slate-200 truncate pr-2">{s.userName}</div>
-                                    <div className="w-16 text-center font-mono text-slate-400">{s.region || '-'}</div>
-                                    <div className="w-16 text-center font-mono text-slate-400">{s.board || '-'}</div>
-                                    <div className="w-16 text-right font-mono text-emerald-400 font-bold">{s.finalRate}</div>
-                                </div>
-                            ))}
+                            {allAdminSummaries.map((s: any, index: number) => {
+                                const getBoardDisplay = (dept: string) => {
+                                    if (!dept) return '-';
+                                    if (dept.includes('/')) {
+                                        const parts = dept.split('/');
+                                        return parts[parts.length - 1].toUpperCase();
+                                    }
+                                    return dept.split(' ')[0].toUpperCase();
+                                };
+
+                                return (
+                                    <div key={`${s.id || s.docId || index}_${index}`} className="flex justify-between items-center bg-slate-900/50 border border-slate-800/30 p-2 rounded-xl text-[11px]">
+                                        <div className="flex-1 font-bold text-slate-200 truncate pr-2">{s.userName}</div>
+                                        <div className="w-16 text-center font-mono text-slate-400">{s.zone || '-'}</div>
+                                        <div className="w-16 text-center font-mono text-slate-400">{getBoardDisplay(s.department)}</div>
+                                        <div className="w-16 text-right font-mono text-emerald-400 font-bold">{s.finalRate}</div>
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
                 )}

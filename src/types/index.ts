@@ -98,6 +98,8 @@ export interface ShiftData {
     breakTimeDuringCurrentPick: number;
     hasAlerted: boolean;
     hasGapAlerted: boolean;
+    dinnerExcessTime?: number;
+    hasAlertedBreak?: boolean;
     lastGapAlertTimestamp: number | null;
     hasHalfwayAlerted: boolean;
     wakeLock: boolean;

@@ -69,6 +69,12 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Real-time Peer Interactions (Shift Notification Hub)
+    match /interactions/{interactionId} {
+      allow read, create, update: if true;
+      allow delete: if isAdmin();
+    }
+
     // Live Floor Leaderboard & Real-time Pick Rates
     match /leaderboard/{entryId} {
       allow read: if true;

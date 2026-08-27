@@ -47,8 +47,8 @@ import { PreviousMonthSummary } from './components/leaderboard/PreviousMonthSumm
 import { BetaSurveyModal } from './components/BetaSurveyModal';
 import { shouldPromptBetaSurvey } from './services/betaSurveyService';
 import { MonthlyReportNotificationModal } from './components/MonthlyReportNotificationModal';
+import { BreakPolicyModal } from './components/modals/BreakPolicyModal';
 import { checkMonthlyReportNotification } from './services/monthlyReportService';
-import { restoreAndProtectShifts, RESTORED_SHIFTS } from './utils/restoreUserData';
 import { shiftDataService } from './services/shiftDataService';
 import { shiftCacheService } from './services/shiftCacheService';
 import { generateFullShiftReport, copyFullShiftReport, restoreShiftFromReportText } from './services/shiftReportService';
@@ -184,6 +184,19 @@ export default function App() {
     });
     const [showAbout, setShowAbout] = useState(false);
     const [showAboutDeveloper, setShowAboutDeveloper] = useState(false);
+
+    const [showBreakPolicy, setShowBreakPolicy] = useState(() => {
+        return localStorage.getItem('pickapp_break_policy_acknowledged') !== 'true';
+    });
+
+    const closeBreakPolicy = () => {
+        localStorage.setItem('pickapp_break_policy_acknowledged', 'true');
+        setShowBreakPolicy(false);
+    };
+
+    // Render logic (I will add this to the render section of App)
+    // <BreakPolicyModal isOpen={showBreakPolicy} onClose={closeBreakPolicy} />
+    
 
     const { 
         shiftData, setShiftData, 
@@ -707,11 +720,10 @@ export default function App() {
     const [announcement, setAnnouncement] = useState<string>('');
 
     const mergedShiftSummaries = useMemo(() => {
-        // Exclude ADMIN from calculations
-        const opName = (shiftData.operator || '').toUpperCase().trim();
-        if (opName === 'ADMIN') return [];
+        const opName = (shiftData.operator || userProfile?.username || localStorage.getItem('lastUser') || '').toUpperCase().trim();
+        const isCurrentAdmin = opName === 'ADMIN' || userProfile?.role === 'admin';
 
-        const localKey = `offline_summaries_${opName}`;
+        const localKey = `offline_summaries_${opName || 'DEFAULT'}`;
         let localSaved: any[] = [];
         try {
             const existing = localStorage.getItem(localKey);
@@ -720,9 +732,17 @@ export default function App() {
             }
         } catch(e) {}
 
-        const all = [...shiftSummaries].filter(s => (s.userName || '').toUpperCase().trim() === opName);
+        const matchesOperator = (item: any) => {
+            if (!item) return false;
+            if (isCurrentAdmin) return true;
+            const itemUser = (item.userName || item.operator || item.user || '').toUpperCase().trim();
+            if (!opName) return true;
+            return itemUser === opName;
+        };
+
+        const all = [...shiftSummaries].filter(matchesOperator);
         localSaved.forEach((localItem: any) => {
-            if ((localItem.userName || '').toUpperCase().trim() !== opName) return;
+            if (!matchesOperator(localItem)) return;
             
             const existsInRemote = all.some((remoteItem: any) => {
                 if (localItem.clockInTime && remoteItem.clockInTime) {
@@ -732,20 +752,6 @@ export default function App() {
             });
             if (!existsInRemote) {
                 all.push(localItem);
-            }
-        });
-
-        RESTORED_SHIFTS.forEach((restoredItem: any) => {
-            if ((restoredItem.userName || '').toUpperCase().trim() === opName || opName === 'DASERGHIE') {
-                const existsInAll = all.some((item: any) => {
-                    if (restoredItem.clockInTime && item.clockInTime) {
-                        return Math.abs(restoredItem.clockInTime - item.clockInTime) < 60000;
-                    }
-                    return normalizeDateStr(item.date) === normalizeDateStr(restoredItem.date);
-                });
-                if (!existsInAll) {
-                    all.push(restoredItem);
-                }
             }
         });
 
@@ -795,124 +801,77 @@ export default function App() {
 
         const combined = [...Object.values(clockInGroups), ...withoutClockIn];
 
-        // Deduplication & Aggregation by normalized date (aggregating cases and order histories)
-        const dateGroups: { [key: string]: any } = {};
+        // Deduplication & Selection of Best Record per normalized date
+        const dateRawGroups: { [key: string]: any[] } = {};
         combined.forEach(item => {
             const normDate = normalizeDateStr(item.date) || (item.clockInTime ? getLocalDateString(new Date(item.clockInTime)) : '');
             if (!normDate || normDate.toLowerCase().includes('invalid')) return;
-            
-            const existingItem = dateGroups[normDate];
-            if (!existingItem) {
-                const initHist = item.history || [];
-                const labelsSet = new Set<string>();
-                if (item.storeLabel) {
-                    item.storeLabel.split(',').forEach((l: string) => { if (l.trim()) labelsSet.add(l.trim().toUpperCase()); });
-                }
-                initHist.forEach((h: any) => {
-                    if (h.storeLabel) {
-                        h.storeLabel.split(',').forEach((l: string) => { if (l.trim()) labelsSet.add(l.trim().toUpperCase()); });
-                    }
-                });
-
-                const imgSet = new Set<string>();
-                if (item.labelImage) imgSet.add(item.labelImage);
-                if (Array.isArray(item.labelImages)) item.labelImages.forEach((img: string) => { if (img) imgSet.add(img); });
-                initHist.forEach((h: any) => {
-                    if (h.labelImage) imgSet.add(h.labelImage);
-                    if (Array.isArray(h.labelImages)) h.labelImages.forEach((img: string) => { if (img) imgSet.add(img); });
-                });
-
-                dateGroups[normDate] = { 
-                    ...item, 
-                    date: normDate,
-                    totalCases: item.totalCases || item.cases || 0,
-                    activeSeconds: item.activeSeconds || 0,
-                    totalSeconds: item.totalSeconds || item.activeSeconds || 0,
-                    storeLabel: Array.from(labelsSet).join(', '),
-                    labelImage: item.labelImage || (Array.from(imgSet)[0] || ''),
-                    labelImages: Array.from(imgSet),
-                    history: initHist
-                };
-            } else {
-                // Combine history arrays without duplicating orders
-                const existingHist = existingItem.history || [];
-                const itemHist = item.history || [];
-                const combinedHist = [...existingHist];
-                itemHist.forEach((h: any) => {
-                    const isDup = combinedHist.some((eh: any) => 
-                        (eh.id && h.id && eh.id === h.id) ||
-                        (eh.timestamp && h.timestamp && eh.timestamp === h.timestamp) ||
-                        (eh.start && h.start && eh.start === h.start && eh.finish && h.finish && eh.finish === h.finish && eh.cases === h.cases && eh.rate === h.rate)
-                    );
-                    if (!isDup) {
-                        combinedHist.push(h);
-                    }
-                });
-                existingItem.history = combinedHist;
-
-                // Collect and merge all store labels
-                const labelsSet = new Set<string>();
-                if (existingItem.storeLabel) {
-                    existingItem.storeLabel.split(',').forEach((l: string) => { if (l.trim()) labelsSet.add(l.trim().toUpperCase()); });
-                }
-                if (item.storeLabel) {
-                    item.storeLabel.split(',').forEach((l: string) => { if (l.trim()) labelsSet.add(l.trim().toUpperCase()); });
-                }
-                combinedHist.forEach((h: any) => {
-                    if (h.storeLabel) {
-                        h.storeLabel.split(',').forEach((l: string) => { if (l.trim()) labelsSet.add(l.trim().toUpperCase()); });
-                    }
-                });
-                existingItem.storeLabel = Array.from(labelsSet).join(', ');
-
-                // Collect and merge all label images
-                const imgSet = new Set<string>();
-                if (existingItem.labelImage) imgSet.add(existingItem.labelImage);
-                if (Array.isArray(existingItem.labelImages)) existingItem.labelImages.forEach((img: string) => { if (img) imgSet.add(img); });
-                if (item.labelImage) imgSet.add(item.labelImage);
-                if (Array.isArray(item.labelImages)) item.labelImages.forEach((img: string) => { if (img) imgSet.add(img); });
-                combinedHist.forEach((h: any) => {
-                    if (h.labelImage) imgSet.add(h.labelImage);
-                    if (Array.isArray(h.labelImages)) h.labelImages.forEach((img: string) => { if (img) imgSet.add(img); });
-                });
-                existingItem.labelImages = Array.from(imgSet);
-                if (!existingItem.labelImage && existingItem.labelImages.length > 0) {
-                    existingItem.labelImage = existingItem.labelImages[0];
-                }
-
-                // Calculate total cases safely
-                const histCases = combinedHist.reduce((acc: number, h: any) => acc + (parseInt(h.cases) || 0), 0);
-                existingItem.totalCases = Math.max(existingItem.totalCases || 0, item.totalCases || item.cases || 0, histCases);
-
-                // Active and Total Seconds (FIX: take max of shift snapshots / history duration to avoid doubling)
-                const histActiveSecs = combinedHist.reduce((acc: number, h: any) => {
-                    let elapsed = h.elapsedSeconds;
-                    if (elapsed === undefined || isNaN(elapsed)) {
-                        const hRate = parseFloat(h.rate);
-                        elapsed = (hRate > 0 && h.cases > 0) ? Math.round((h.cases / hRate) * 3600) : 0;
-                    }
-                    return acc + (elapsed || 0);
-                }, 0);
-
-                const maxActive = Math.max(existingItem.activeSeconds || 0, item.activeSeconds || 0, histActiveSecs);
-                existingItem.activeSeconds = maxActive;
-
-                const maxTotal = Math.max(existingItem.totalSeconds || 0, item.totalSeconds || 0, existingItem.activeSeconds);
-                existingItem.totalSeconds = maxTotal;
-
-                existingItem.steps = Math.max(existingItem.steps || 0, item.steps || 0);
-
-                if (item.clockInTime && (!existingItem.clockInTime || item.clockInTime < existingItem.clockInTime)) {
-                    existingItem.clockInTime = item.clockInTime;
-                }
-                if (item.clockOutTime && (!existingItem.clockOutTime || item.clockOutTime > existingItem.clockOutTime)) {
-                    existingItem.clockOutTime = item.clockOutTime;
-                }
-
-                existingItem.finalRate = existingItem.activeSeconds > 0 
-                    ? Math.round((existingItem.totalCases / existingItem.activeSeconds) * 3600) 
-                    : Math.max(existingItem.finalRate || 0, item.finalRate || 0);
+            if (!dateRawGroups[normDate]) {
+                dateRawGroups[normDate] = [];
             }
+            dateRawGroups[normDate].push(item);
+        });
+
+        const dateGroups: { [key: string]: any } = {};
+        Object.entries(dateRawGroups).forEach(([normDate, items]) => {
+            // Sort items to find the single best master shift:
+            // 1. Prefer items with larger history log count (fully completed shift)
+            // 2. Prefer non-anonymous/named operators
+            // 3. Prefer larger case counts
+            const sortedItems = [...items].sort((a, b) => {
+                const aHistLen = Array.isArray(a.history) ? a.history.length : 0;
+                const bHistLen = Array.isArray(b.history) ? b.history.length : 0;
+                if (aHistLen !== bHistLen) return bHistLen - aHistLen;
+
+                const aIsAnon = !a.userId || a.userId.startsWith('anon_') || a.id?.startsWith('anon_') || (a.operator || '').toUpperCase().startsWith('ANON');
+                const bIsAnon = !b.userId || b.userId.startsWith('anon_') || b.id?.startsWith('anon_') || (b.operator || '').toUpperCase().startsWith('ANON');
+                if (aIsAnon !== bIsAnon) return aIsAnon ? 1 : -1;
+
+                const aCases = a.totalCases || a.cases || 0;
+                const bCases = b.totalCases || b.cases || 0;
+                return bCases - aCases;
+            });
+
+            const bestItem = sortedItems[0];
+            const initHist = bestItem.history || [];
+            
+            // Build the sanitized store labels and images lists from the master shift
+            const labelsSet = new Set<string>();
+            if (bestItem.storeLabel) {
+                bestItem.storeLabel.split(',').forEach((l: string) => { if (l.trim()) labelsSet.add(l.trim().toUpperCase()); });
+            }
+            initHist.forEach((h: any) => {
+                if (h.storeLabel) {
+                    h.storeLabel.split(',').forEach((l: string) => { if (l.trim()) labelsSet.add(l.trim().toUpperCase()); });
+                }
+            });
+
+            const imgSet = new Set<string>();
+            if (bestItem.labelImage) imgSet.add(bestItem.labelImage);
+            if (Array.isArray(bestItem.labelImages)) bestItem.labelImages.forEach((img: string) => { if (img) imgSet.add(img); });
+            initHist.forEach((h: any) => {
+                if (h.labelImage) imgSet.add(h.labelImage);
+                if (Array.isArray(h.labelImages)) h.labelImages.forEach((img: string) => { if (img) imgSet.add(img); });
+            });
+
+            const totalCases = bestItem.totalCases || bestItem.cases || 0;
+            const activeSeconds = bestItem.activeSeconds || 0;
+            const totalSeconds = bestItem.totalSeconds || bestItem.activeSeconds || 0;
+
+            dateGroups[normDate] = { 
+                ...bestItem, 
+                date: normDate,
+                totalCases,
+                activeSeconds,
+                totalSeconds,
+                storeLabel: Array.from(labelsSet).join(', '),
+                labelImage: bestItem.labelImage || (Array.from(imgSet)[0] || ''),
+                labelImages: Array.from(imgSet),
+                history: initHist,
+                finalRate: activeSeconds > 0 
+                    ? Math.round((totalCases / activeSeconds) * 3600) 
+                    : (bestItem.finalRate || 0)
+            };
         });
 
         const deduplicated = Object.values(dateGroups);
@@ -1391,17 +1350,23 @@ export default function App() {
             lane4
         };
         const rawJson = JSON.stringify(dataToSave);
-        if (shiftData.operator) {
-            safeLocalStorage.setItem(`pickData_${shiftData.operator}`, rawJson, true);
-            safeLocalStorage.setItem('lastUser', shiftData.operator);
-            saveLocalActiveShift(shiftData.operator, dataToSave).catch(() => {});
-            Preferences.set({ key: `pickData_${shiftData.operator}`, value: rawJson }).catch(e => { /* Silently fail */ });
-            Preferences.set({ key: 'lastUser', value: shiftData.operator }).catch(e => { /* Silently fail */ });
-        } else {
-            safeLocalStorage.setItem('pickData', rawJson, true);
-            saveLocalActiveShift('default', dataToSave).catch(() => {});
-            Preferences.set({ key: 'pickData', value: rawJson }).catch(e => { /* Silently fail */ });
-        }
+
+        // Debounce storage writes by 3 seconds to protect mobile devices from high-frequency bridge overhead and disk lag
+        const handler = setTimeout(() => {
+            if (shiftData.operator) {
+                safeLocalStorage.setItem(`pickData_${shiftData.operator}`, rawJson, true);
+                safeLocalStorage.setItem('lastUser', shiftData.operator);
+                saveLocalActiveShift(shiftData.operator, dataToSave).catch(() => {});
+                Preferences.set({ key: `pickData_${shiftData.operator}`, value: rawJson }).catch(e => { /* Silently fail */ });
+                Preferences.set({ key: 'lastUser', value: shiftData.operator }).catch(e => { /* Silently fail */ });
+            } else {
+                safeLocalStorage.setItem('pickData', rawJson, true);
+                saveLocalActiveShift('default', dataToSave).catch(() => {});
+                Preferences.set({ key: 'pickData', value: rawJson }).catch(e => { /* Silently fail */ });
+            }
+        }, 3000);
+
+        return () => clearTimeout(handler);
     }, [shiftData, caseCount, lane1, lane2, lane3, lane4]);
 
     useEffect(() => {
@@ -1530,11 +1495,7 @@ export default function App() {
         // Load existing notifications from IndexedDB for this operator
         loadShiftNotifications(targetOp);
 
-        const unsubscribe = subscribeToIncomingInteractions(targetOp, (interaction) => {
-            setActiveInteraction(interaction);
-            deviceHapticService('medium');
-            playAlertSound('success');
-
+        const unsubscribe = subscribeToIncomingInteractions(targetOp, (interaction, isInitial) => {
             // Persist peer interaction in Shift Notification Hub
             addShiftNotification({
                 id: interaction.id || `peer_${Date.now()}`,
@@ -1545,10 +1506,15 @@ export default function App() {
                 interactionType: interaction.type,
                 senderName: interaction.senderName,
                 timestamp: interaction.createdAt ? new Date(interaction.createdAt).getTime() : Date.now(),
-                isRead: false
+                isRead: isInitial ? true : false
             });
 
-            setTimeout(() => setActiveInteraction(null), 6000);
+            if (!isInitial) {
+                setActiveInteraction(interaction);
+                deviceHapticService('medium');
+                playAlertSound('success');
+                setTimeout(() => setActiveInteraction(null), 6000);
+            }
         });
 
         return () => unsubscribe();
@@ -1576,43 +1542,7 @@ export default function App() {
                 if (o) offlineSaved = JSON.parse(o);
             } catch(e) {}
 
-            if (op === 'DASERGHIE') {
-                // Check if we have an entry for 2026-06-04
-                const hasJune4Hist = histSaved.some(s => normalizeDateStr(s.date) === '2026-06-04');
-                const hasJune4Offline = offlineSaved.some(s => normalizeDateStr(s.date) === '2026-06-04');
-                
-                if (!hasJune4Hist || !hasJune4Offline) {
-                    const seedShift = {
-                        userId: "RjrzMTQa3BZv4hbgB0bXE5wQmjq1",
-                        userName: "DASERGHIE",
-                        department: "Ambient Zone",
-                        zone: "ambient",
-                        totalCases: 1420,
-                        finalRate: 235,
-                        activeSeconds: 21750,
-                        totalSeconds: 28800,
-                        breakSeconds: 7050,
-                        steps: 12250,
-                        date: "2026-06-04",
-                        history: [],
-                        storeLabel: "D4",
-                        clockInTime: new Date("2026-06-04T18:55:00.000Z").getTime(),
-                        clockOutTime: new Date("2026-06-05T02:55:00.000Z").getTime(),
-                        timestamp: { seconds: Math.floor(new Date("2026-06-05T03:00:00.000Z").getTime() / 1000) }
-                    };
-                    
-                    if (!hasJune4Hist) {
-                        histSaved.unshift(seedShift);
-                        localStorage.setItem(localHistKey, JSON.stringify(histSaved));
-                    }
-                    if (!hasJune4Offline) {
-                        offlineSaved.unshift(seedShift);
-                        localStorage.setItem(localOfflineKey, JSON.stringify(offlineSaved));
-                    }
-                    
-                    saveShiftSummary(seedShift).then(() => {});
-                }
-            }
+
 
             // Perform date-based aggregation: Combine matching date entries instead of throwing secondary shifts away!
             const cleanList = (arr: any[]) => {
@@ -1805,7 +1735,7 @@ export default function App() {
             "• Finish By: The exact time you must complete the pick to remain on target.",
             "• Ahead / Behind: Indicates if your current active order is beating the target rate.",
             "• Projected Rate: Estimated average if you maintain current speed on this order.",
-            "• Required Pace: The speed needed to finish the remainder of the current pick on target.",
+            "• Required Pace: The speed needed to finish the remainder of the current pick on target.\n• Break Policy: Your 45-minute exempt time (5m clock-out, 30m dinner, 10m post-dinner) is automatically deducted. IMPORTANT: You must press the BREAK button for your dinner; any time exceeding 30 minutes is added back to your working time.",
             "• Efficiency (st/cs): Movement tracking estimating steps taken per case.",
             "• Consistency (%): Measures picking rhythm across different orders using standard deviation.",
             "  100% is perfect rhythm. 60%+ is steady. <50% is erratic."
@@ -1892,6 +1822,11 @@ export default function App() {
 
     const handleVerifyUnlock = async () => {
         haptic('medium');
+        if (unlockPin.length !== 6) {
+            setUnlockError('Security PIN must be exactly 6 digits.');
+            haptic('heavy');
+            return;
+        }
         const operatorName = shiftData.operator || localStorage.getItem('lastUser') || 'DASERGHIE';
         const storedPin = localStorage.getItem(`offline_pin_${operatorName}`);
         
@@ -1903,7 +1838,7 @@ export default function App() {
             // Try Firebase re-auth as fallback
             const email = operatorName.includes('@') ? operatorName.toLowerCase() : `${operatorName.toLowerCase()}@pick.app`;
             try {
-                const authPin = unlockPin.length < 6 ? unlockPin.padEnd(6, '0') : unlockPin;
+                const authPin = unlockPin;
                 await signInWithEmailAndPassword(auth, email, authPin);
                 setIsEditingCaseCount(true);
                 setTempCaseCount(caseCount);
@@ -1911,7 +1846,7 @@ export default function App() {
                 // Update offline pin cache if successful re-auth
                 localStorage.setItem(`offline_pin_${operatorName}`, unlockPin);
             } catch (err) {
-                setUnlockError('Invalid password. Access denied.');
+                setUnlockError('Invalid password/PIN. Access denied.');
                 haptic('heavy');
             }
         }
@@ -1948,10 +1883,16 @@ export default function App() {
             return;
         }
 
+        if (pin.length !== 6) {
+            setLoginError("Security PIN must be exactly 6 digits.");
+            haptic('heavy');
+            return;
+        }
+
         // 1. Try Firebase Email/Password Auth
         const email = userTrimmed.includes('@') ? userTrimmed.toLowerCase() : `${userTrimmed.toLowerCase()}@pick.app`;
         try {
-            const authPin = pin.length < 6 ? pin.padEnd(6, '0') : pin;
+            const authPin = pin;
             let userCredential;
             try {
                 userCredential = await signInWithEmailAndPassword(auth, email, authPin);
@@ -2164,11 +2105,6 @@ export default function App() {
         setShiftData
     );
 
-    useEffect(() => {
-        restoreAndProtectShifts('DASERGHIE');
-    }, []);
-
-
     const masterStart = () => {
         haptic('medium');
         requestMotionPermission();
@@ -2282,7 +2218,9 @@ export default function App() {
         const cases = parseInt(caseCount);
         if (!cases || isNaN(cases) || !pickStartTime) return;
 
-        const rawElapsed = (now.getTime() - pickStartTime) / 1000 - breakTimeDuringCurrentPick;
+        const fixedExemptSeconds = 15 * 60; // 5 + 10 = 15m
+        const actualBreakSeconds = shiftData.totalBreakSeconds || 0;
+        const rawElapsed = (now.getTime() - pickStartTime) / 1000 - (fixedExemptSeconds + actualBreakSeconds);
         const elapsedSeconds = Math.max(1, isNaN(rawElapsed) ? 1 : rawElapsed);
         const finalRate = Math.round((cases / elapsedSeconds) * 3600);
 
@@ -2503,11 +2441,22 @@ export default function App() {
             saveSuccess = false;
         }
 
-        if (entry.labelImages) {
-            for (let i = 0; i < entry.labelImages.length; i++) {
-                const img = entry.labelImages[i];
-                saveImageToDevice(img, `Label_${(entry.date || '').replace(/\//g, '-')}_${i}.png`);
-            }
+        if (entry.labelImages && entry.labelImages.length > 0) {
+            const opName = shiftData.operator || "Unknown";
+            const shiftDateStr = getLocalDateString(new Date(shiftStart));
+            import('./services/indexedDbService').then(({ saveLocalPhoto }) => {
+                for (let i = 0; i < entry.labelImages.length; i++) {
+                    const img = entry.labelImages[i];
+                    const photoId = `photo_${shiftDateStr.replace(/-/g, '')}_${opName.toUpperCase().trim()}_${i}_${Date.now()}`;
+                    saveLocalPhoto(photoId, opName, shiftDateStr, img).catch(e => console.warn('IndexedDB save photo failed:', e));
+                    saveImageToDevice(img, `Label_${(entry.date || '').replace(/\//g, '-')}_${i}.png`);
+                }
+            }).catch(err => {
+                console.warn('Failed to load indexedDbService for photo save:', err);
+                for (let i = 0; i < entry.labelImages.length; i++) {
+                    saveImageToDevice(entry.labelImages[i], `Label_${(entry.date || '').replace(/\//g, '-')}_${i}.png`);
+                }
+            });
         }
 
         // If database save failed due to offline state, retain in local state
@@ -2563,11 +2512,13 @@ export default function App() {
         haptic('medium');
         if (breakStartTime) {
             const breakDuration = (now.getTime() - breakStartTime) / 1000;
-            
+            const isDinner = breakDuration > 600; // Assume dinner if longer than 10 mins, or we could add a toggle.
+            const excessDinnerTime = isDinner ? Math.max(0, breakDuration - 1800) : 0; // 30 mins = 1800s
+
             const newHistoryEntry = {
                 start: new Date(breakStartTime).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
                 finish: now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
-                gap: "BREAK",
+                gap: isDinner ? "DINNER BREAK" : "BREAK",
                 cases: "-",
                 rate: "-",
                 saved: formatTime(breakDuration),
@@ -2584,7 +2535,8 @@ export default function App() {
                 totalExcludedTime: shiftData.totalExcludedTime + breakDuration,
                 lastStopTimestamp: now.getTime(),
                 history: [newHistoryEntry, ...shiftData.history],
-                breakTimeDuringCurrentPick: isPicking ? breakTimeDuringCurrentPick + breakDuration : breakTimeDuringCurrentPick
+                breakTimeDuringCurrentPick: isPicking ? breakTimeDuringCurrentPick + breakDuration : breakTimeDuringCurrentPick,
+                dinnerExcessTime: (shiftData.dinnerExcessTime || 0) + excessDinnerTime
             });
         }
     };
@@ -3657,6 +3609,8 @@ export default function App() {
                         haptic={haptic}
                     />
                 )}
+                
+                <BreakPolicyModal isOpen={showBreakPolicy} onClose={closeBreakPolicy} />
                 
                 <SettingsModal
                     isOpen={showSettings}

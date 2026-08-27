@@ -3,7 +3,7 @@ import { Sparkles, Clock, LogOut, Activity, Coffee, Edit2, Check, X, Camera, Tra
 import { formatHHMM, formatTime } from '../../utils/formatUtils';
 import { getDepartmentBreakdown } from '../../utils/statsUtils';
 import { haptic } from '../../services/hapticService';
-import { deleteShiftSummary, fetchShiftSummaries } from '../../services/leaderboardService';
+import { deleteShiftSummary, fetchShiftSummaries, saveShiftSummary } from '../../services/leaderboardService';
 import { copyFullShiftReport } from '../../services/shiftReportService';
 import { auth } from '../../lib/firebase';
 
@@ -38,6 +38,25 @@ export const HistoricalShiftModal: React.FC<HistoricalShiftModalProps> = ({
     setEditingOrderLabel,
     handleSavePastOrderLabel
 }) => {
+    const [editingBreak, setEditingBreak] = React.useState(false);
+    const [newBreakSecs, setNewBreakSecs] = React.useState(viewingPastSummary?.breakSeconds || 0);
+
+    const handleSaveBreak = async () => {
+        if (!viewingPastSummary) return;
+        haptic('heavy');
+        const updatedSummary = {
+            ...viewingPastSummary,
+            breakSeconds: newBreakSecs,
+            isBreakModified: true
+        };
+        
+        await saveShiftSummary(updatedSummary);
+        
+        setShiftSummaries(prev => prev.map(s => s.id === viewingPastSummary.id ? updatedSummary : s));
+        setViewingPastSummary(updatedSummary);
+        setEditingBreak(false);
+    };
+
     if (!viewingPastSummary) return null;
 
     return (
@@ -128,9 +147,32 @@ export const HistoricalShiftModal: React.FC<HistoricalShiftModalProps> = ({
                                             <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Activity size={10}/> Gross Length</div>
                                             <div className="text-lg font-black text-white">{formatHHMM(derivedTotalSecs)}</div>
                                         </div>
-                                        <div className="bg-slate-950/50 p-3 rounded-2xl border border-slate-800/80">
-                                            <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Coffee size={10}/> Break Time</div>
-                                            <div className="text-lg font-black text-amber-400">{formatHHMM(derivedBreakSecs)}</div>
+                                        <div className={`bg-slate-950/50 p-3 rounded-2xl border ${viewingPastSummary.isBreakModified ? 'border-amber-500/50' : 'border-slate-800/80'}`}>
+                                            <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center justify-between gap-1.5">
+                                                <span className="flex items-center gap-1.5"><Coffee size={10}/> Break Time</span>
+                                                {(isUserAdmin() || (viewingPastSummary.userName || '').toUpperCase().trim() === (shiftData.operator || '').toUpperCase().trim()) && !editingBreak && (
+                                                    <button onClick={() => setEditingBreak(true)} className="text-sky-400 hover:text-sky-300">
+                                                        <Edit2 size={10} />
+                                                    </button>
+                                                )}
+                                            </div>
+                                            {editingBreak ? (
+                                                <div className="flex items-center gap-1">
+                                                    <input 
+                                                        type="number"
+                                                        value={Math.floor(newBreakSecs / 60)}
+                                                        onChange={(e) => setNewBreakSecs(parseInt(e.target.value) * 60)}
+                                                        className="w-12 bg-slate-900 text-white text-lg font-black rounded p-1"
+                                                    />
+                                                    <span className="text-white font-black">m</span>
+                                                    <button onClick={handleSaveBreak} className="bg-emerald-500 text-slate-900 rounded p-1"><Check size={12} /></button>
+                                                    <button onClick={() => setEditingBreak(false)} className="bg-slate-700 text-white rounded p-1"><X size={12} /></button>
+                                                </div>
+                                            ) : (
+                                                <div className={`text-lg font-black ${viewingPastSummary.isBreakModified ? 'text-amber-500' : 'text-amber-400'}`}>
+                                                    {formatHHMM(derivedBreakSecs)}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 </div>

@@ -102,10 +102,7 @@ export function useShiftNotifications({ operatorName, showToast }: UseShiftNotif
 
     loadShiftNotifications(targetOp);
 
-    const unsubscribe = subscribeToIncomingInteractions(targetOp, (interaction) => {
-      setActiveInteraction(interaction);
-      deviceHaptic('medium');
-
+    const unsubscribe = subscribeToIncomingInteractions(targetOp, (interaction, isInitial) => {
       addShiftNotification({
         id: interaction.id || `peer_${Date.now()}`,
         operator: targetOp,
@@ -115,10 +112,14 @@ export function useShiftNotifications({ operatorName, showToast }: UseShiftNotif
         interactionType: interaction.type,
         senderName: interaction.senderName,
         timestamp: interaction.createdAt ? new Date(interaction.createdAt).getTime() : Date.now(),
-        isRead: false
+        isRead: isInitial ? true : false
       });
 
-      setTimeout(() => setActiveInteraction(null), 6000);
+      if (!isInitial) {
+        setActiveInteraction(interaction);
+        deviceHaptic('medium');
+        setTimeout(() => setActiveInteraction(null), 6000);
+      }
     });
 
     return () => {

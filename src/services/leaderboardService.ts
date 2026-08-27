@@ -890,6 +890,10 @@ export const fetchShiftSummaries = async (userName: string, force: boolean = fal
   if (!userName) return [];
   
   const safeName = userName.toUpperCase().trim();
+  if (safeName === 'ADMIN') {
+    return await fetchAllShiftSummaries(force);
+  }
+
   const cacheKey = `shiftsummaries_${safeName}`;
 
   // 1. Check in-memory/quotaManager cache first for instant loading
@@ -900,7 +904,7 @@ export const fetchShiftSummaries = async (userName: string, force: boolean = fal
     }
   }
 
-  // 2. Check IndexedDB clean 6-week local mirror
+  // 2. Check IndexedDB clean local mirror
   if (!force) {
     try {
       const idbShifts = await getLocalShiftSummaries(safeName);
@@ -923,7 +927,7 @@ export const fetchShiftSummaries = async (userName: string, force: boolean = fal
   cleanupOldShiftSummaries(userName);
   
   const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - 120);
+  cutoffDate.setDate(cutoffDate.getDate() - 365);
   const minDateStr = cutoffDate.toISOString().split('T')[0];
 
   const nameVariants = Array.from(new Set([
@@ -931,22 +935,36 @@ export const fetchShiftSummaries = async (userName: string, force: boolean = fal
     userName,
     userName.toLowerCase(),
     userName.toUpperCase(),
-    userName.charAt(0).toUpperCase() + userName.slice(1).toLowerCase()
-  ])).filter(Boolean);
-
-  const q = query(
-    collection(db, 'shift_summaries'),
-    where('userName', 'in', nameVariants.slice(0, 10)),
-    limit(250)
-  );
+    userName.charAt(0).toUpperCase() + userName.slice(1).toLowerCase(),
+  ])).filter(Boolean).slice(0, 10);
 
   try {
-    const snapshot = await getDocs(q);
-    let summaries = snapshot.docs.map(doc => {
-      const data = doc.data() as any;
+    const currentUid = auth.currentUser?.uid;
+    const queries: Promise<any>[] = [
+      getDocs(query(collection(db, 'shift_summaries'), where('userName', 'in', nameVariants), limit(300))),
+      getDocs(query(collection(db, 'shift_summaries'), where('operator', 'in', nameVariants), limit(300)))
+    ];
+    if (currentUid && currentUid !== 'anon') {
+      queries.push(getDocs(query(collection(db, 'shift_summaries'), where('userId', '==', currentUid), limit(300))));
+    }
+
+    const snapshots = await Promise.all(queries.map(p => p.catch(() => null)));
+    const docMap = new Map<string, any>();
+
+    snapshots.forEach(snap => {
+      if (snap && snap.docs) {
+        snap.docs.forEach((docSnap: any) => {
+          if (!docMap.has(docSnap.id)) {
+            docMap.set(docSnap.id, { id: docSnap.id, ...docSnap.data() });
+          }
+        });
+      }
+    });
+
+    let summaries = Array.from(docMap.values()).map(data => {
       const clockInTime = data.clockInTime || (data.date ? new Date(data.date.includes('T') ? data.date : `${data.date}T06:00:00`).getTime() : (data.timestamp?.seconds ? data.timestamp.seconds * 1000 : undefined));
       const clockOutTime = data.clockOutTime || (clockInTime && (data.totalSeconds || data.activeSeconds) ? clockInTime + Math.round((data.totalSeconds || data.activeSeconds || 0) * 1000) : undefined);
-      return { id: doc.id, ...data, clockInTime, clockOutTime } as any;
+      return { id: data.id, ...data, clockInTime, clockOutTime } as any;
     });
     
     // Client-side date filter to prevent needing composite indices
@@ -1474,16 +1492,10 @@ export const fetchAllShiftSummaries = async (force: boolean = false): Promise<Sh
   try {
     const summariesRef = collection(db, 'shift_summaries');
     
-    // SERVER-SIDE FILTER: Only fetch records from last 90 days to optimize quota
-    const ninetyDaysAgo = new Date();
-    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-    const minDateStr = ninetyDaysAgo.toISOString().split('T')[0];
-
+    // Fetch all documents (up to 500) to ensure complete history across all operators
     const q = query(
-      summariesRef, 
-      where('date', '>=', minDateStr),
-      orderBy('date', 'desc'),
-      limit(100) // Reduced from 500 for quota safety
+      summariesRef,
+      limit(500)
     );
     
     const snapshot = await getDocs(q);
@@ -1493,37 +1505,22 @@ export const fetchAllShiftSummaries = async (force: boolean = false): Promise<Sh
       delete data.screenshot;
       delete data.labelImage;
       delete data.labelImages;
-      return { id: doc.id, ...data } as ShiftSummary;
+
+      const clockInTime = data.clockInTime || (data.date ? new Date(data.date.includes('T') ? data.date : `${data.date}T06:00:00`).getTime() : (data.timestamp?.seconds ? data.timestamp.seconds * 1000 : undefined));
+      const clockOutTime = data.clockOutTime || (clockInTime && (data.totalSeconds || data.activeSeconds) ? clockInTime + Math.round((data.totalSeconds || data.activeSeconds || 0) * 1000) : undefined);
+
+      return { id: doc.id, ...data, clockInTime, clockOutTime } as ShiftSummary;
     });
     
-    // Exclude ADMIN users from all stats
-    summaries = summaries.filter(item => (item.userName || '').toUpperCase().trim() !== 'ADMIN');
-
-    // Deduplication by userName and date
-    const userDateGroups: { [key: string]: any } = {};
-    summaries.forEach(item => {
-        if (!item.userName) return;
-        const normDate = item.clockInTime 
-            ? getLocalDateString(new Date(item.clockInTime)) 
-            : normalizeDateStr(item.date);
-        if (!normDate || normDate.toLowerCase().includes('invalid')) return;
-        
-        const groupKey = `${item.userName.toUpperCase().trim()}_${normDate}`;
-        const existingItem = userDateGroups[groupKey];
-        if (!existingItem) {
-            userDateGroups[groupKey] = item;
-        } else {
-            const existingCases = existingItem.totalCases || 0;
-            const itemCases = item.totalCases || 0;
-            if (itemCases > existingCases || (itemCases === existingCases && item.timestamp && !existingItem.timestamp)) {
-                userDateGroups[groupKey] = item;
-            }
-        }
+    // Sort descending by date/clockInTime/timestamp
+    summaries.sort((a: any, b: any) => {
+      const aTime = a.clockInTime || (a.timestamp?.seconds ? a.timestamp.seconds * 1000 : (a.date ? new Date(a.date).getTime() : 0));
+      const bTime = b.clockInTime || (b.timestamp?.seconds ? b.timestamp.seconds * 1000 : (b.date ? new Date(b.date).getTime() : 0));
+      return bTime - aTime;
     });
 
-    const result = Object.values(userDateGroups) as ShiftSummary[];
-    setCachedData(cacheKey, result);
-    return result;
+    setCachedData(cacheKey, summaries);
+    return summaries;
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'shift_summaries');
     return getCachedData<ShiftSummary[]>(cacheKey) || [];
@@ -1582,7 +1579,7 @@ export const sendSocialInteraction = async (
  */
 export const subscribeToIncomingInteractions = (
     userName: string,
-    onInteraction: (interaction: any) => void
+    onInteraction: (interaction: any, isInitial: boolean) => void
 ): (() => void) => {
     if (!db || !userName) {
         return () => {};
@@ -1595,15 +1592,18 @@ export const subscribeToIncomingInteractions = (
             limit(15)
         );
 
+        let isInitialLoad = true;
+
         const unsubscribe = onSnapshot(q, (snapshot) => {
             snapshot.docChanges().forEach((change) => {
                 if (change.type === 'added') {
                     const data = change.doc.data();
                     if (data.receiverName && data.receiverName.toLowerCase() === userName.toLowerCase()) {
-                        onInteraction(data);
+                        onInteraction(data, isInitialLoad);
                     }
                 }
             });
+            isInitialLoad = false;
         }, (err) => {
             console.warn('Firestore interactions listener warning:', err);
         });
