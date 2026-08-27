@@ -940,7 +940,7 @@ export default function App() {
         rate, isRateGood, net, isNetGood, consistencyPercent, 
         shiftBestRate, trendData, finishTime, isWarning, 
         activeElapsedSeconds, totalShiftSeconds, totalBreakSeconds,
-        finalExemption, isAisles, accruedPrep, accruedDinner, accruedCleanup,
+        finalExemption, isAisles, accruedClockOut, accruedDinner, accruedPostDinner,
         byDepartment
     } = stats;
 
@@ -1128,7 +1128,10 @@ export default function App() {
             };
             
             sendUpdate();
-            // BACKGROUND INTERVAL REMOVED
+            
+            // Restore 30s heartbeat to ensure users remain visible in live feed
+            const heartbeatInterval = setInterval(sendUpdate, 30000);
+            return () => clearInterval(heartbeatInterval);
         } else if (isShiftFinalized && shiftData.operator) {
             updateLiveStatus(shiftData.operator, rateRef.current, currentDept?.name || 'UNKNOWN', false, {
                 totalCases: totalCasesRef.current,
@@ -2532,10 +2535,10 @@ export default function App() {
             updateShiftData({
                 isOnBreak: false,
                 breakStartTime: null,
-                totalExcludedTime: shiftData.totalExcludedTime + breakDuration,
+                totalExcludedTime: shiftData.totalExcludedTime + (isDinner ? Math.min(breakDuration, 1800) : breakDuration),
                 lastStopTimestamp: now.getTime(),
                 history: [newHistoryEntry, ...shiftData.history],
-                breakTimeDuringCurrentPick: isPicking ? breakTimeDuringCurrentPick + breakDuration : breakTimeDuringCurrentPick,
+                breakTimeDuringCurrentPick: isPicking ? breakTimeDuringCurrentPick + (isDinner ? Math.min(breakDuration, 1800) : breakDuration) : breakTimeDuringCurrentPick,
                 dinnerExcessTime: (shiftData.dinnerExcessTime || 0) + excessDinnerTime
             });
         }
@@ -3823,9 +3826,9 @@ export default function App() {
                     activeElapsedSeconds={activeElapsedSeconds}
                     isAisles={isAisles}
                     finalExemption={finalExemption}
-                    accruedPrep={accruedPrep}
+                    accruedPostDinner={accruedPostDinner}
                     accruedDinner={accruedDinner}
-                    accruedCleanup={accruedCleanup}
+                    accruedClockOut={accruedClockOut}
                     shiftNotes={shiftNotes}
                     setShiftNotes={setShiftNotes}
                     updateShiftData={updateShiftData}

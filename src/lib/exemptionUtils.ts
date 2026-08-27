@@ -10,31 +10,33 @@
 import { WarehouseSettings } from '../types';
 
 export interface AislesExemptionDetail {
-    prep: number;
+    clockOut: number;
     dinner: number;
-    cleanup: number;
+    postDinner: number;
     total: number;
 }
 
 export const calculateAislesExemptionDetail = (totalSeconds: number, rules?: WarehouseSettings['exemptionRules']): AislesExemptionDetail => {
+    const validTotal = (typeof totalSeconds === 'number' && !isNaN(totalSeconds) && isFinite(totalSeconds)) ? Math.max(0, totalSeconds) : 0;
+    
     const r = rules || {
-        prepLimitSeconds: 600,
-        prepAccrualWindowSeconds: 1800,
+        clockOutLimitSeconds: 300,
+        clockOutAccrualWindowSeconds: 21600,
         dinnerLimitSeconds: 1800,
         dinnerAccrualWindowSeconds: 21600,
-        cleanupLimitSeconds: 300,
-        cleanupAccrualWindowSeconds: 21600
+        postDinnerLimitSeconds: 600,
+        postDinnerAccrualWindowSeconds: 1800
     };
 
-    const prep = Math.min(totalSeconds * (r.prepLimitSeconds / r.prepAccrualWindowSeconds), r.prepLimitSeconds);
-    const dinner = Math.min(totalSeconds * (r.dinnerLimitSeconds / r.dinnerAccrualWindowSeconds), r.dinnerLimitSeconds);
-    const cleanup = Math.min(totalSeconds * (r.cleanupLimitSeconds / r.cleanupAccrualWindowSeconds), r.cleanupLimitSeconds);
+    const clockOut = Math.min(validTotal * (r.clockOutLimitSeconds / r.clockOutAccrualWindowSeconds), r.clockOutLimitSeconds);
+    const dinner = Math.min(validTotal * (r.dinnerLimitSeconds / r.dinnerAccrualWindowSeconds), r.dinnerLimitSeconds);
+    const postDinner = Math.min(validTotal * (r.postDinnerLimitSeconds / r.postDinnerAccrualWindowSeconds), r.postDinnerLimitSeconds);
     
     return {
-        prep: Math.floor(prep),
-        dinner: Math.floor(dinner),
-        cleanup: Math.floor(cleanup),
-        total: Math.floor(prep + dinner + cleanup)
+        clockOut: Math.floor(clockOut) || 0,
+        dinner: Math.floor(dinner) || 0,
+        postDinner: Math.floor(postDinner) || 0,
+        total: Math.floor(clockOut + dinner + postDinner) || 0
     };
 };
 

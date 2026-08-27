@@ -34,15 +34,24 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
     const isAisles = shiftData.department === 'aisles' || shiftData.department?.startsWith('aisle');
 
     const statsSummary = useMemo(() => {
-        if (!shiftData.firstStartTime) {
+        const rawFirstStart = shiftData.firstStartTime;
+        const firstStart = typeof rawFirstStart === 'number' ? (isNaN(rawFirstStart) ? null : rawFirstStart) : (typeof rawFirstStart === 'string' ? Number(rawFirstStart) : null);
+        
+        if (!firstStart || isNaN(firstStart) || firstStart <= 0) {
             return { totalShiftSeconds: 0, totalBreakSeconds: 0, activeElapsedSeconds: 0, activeElapsedHours: 0, aislesExemptionDetail: calculateAislesExemptionDetail(0, warehouseConfig?.exemptionRules), spans: [] as { dept: string, start: number, end: number }[] };
         }
         
+        const nowTime = (now && typeof now.getTime === 'function' && !isNaN(now.getTime())) ? now.getTime() : Date.now();
+        
         let currentBreak = 0;
         if (shiftData.isOnBreak && shiftData.breakStartTime) {
-            currentBreak = (now.getTime() - shiftData.breakStartTime) / 1000;
+            const breakStart = typeof shiftData.breakStartTime === 'number' ? shiftData.breakStartTime : Number(shiftData.breakStartTime);
+            if (!isNaN(breakStart) && breakStart > 0) {
+                currentBreak = Math.max(0, (nowTime - breakStart) / 1000);
+            }
         }
-        const totalBreaks = shiftData.totalExcludedTime + currentBreak;
+        const totalExcluded = (typeof shiftData.totalExcludedTime === 'number' && !isNaN(shiftData.totalExcludedTime)) ? shiftData.totalExcludedTime : 0;
+        const totalBreaks = totalExcluded + currentBreak;
 
         const spans: { dept: string, start: number, end: number }[] = [];
         const chronologicalHistory = [...(shiftData.history || [])]
@@ -53,16 +62,18 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         const activeDept = shiftData.department || 'aisles';
         
         if (chronologicalHistory.length === 0) {
-            currentSpan = { dept: activeDept, start: shiftData.firstStartTime, end: now.getTime() };
+            currentSpan = { dept: activeDept, start: firstStart, end: nowTime };
             spans.push(currentSpan);
         } else {
             for (const h of chronologicalHistory) {
                 const dept = h.department || 'aisles';
-                const hStart = h.timestamp || shiftData.firstStartTime;
-                const hEnd = hStart + ((h.elapsedSeconds || 0) * 1000);
+                const rawHStart = h.timestamp;
+                const hStart = (typeof rawHStart === 'number' && !isNaN(rawHStart)) ? rawHStart : (typeof rawHStart === 'string' ? Number(rawHStart) || firstStart : firstStart);
+                const elapsedSec = (typeof h.elapsedSeconds === 'number' && !isNaN(h.elapsedSeconds)) ? h.elapsedSeconds : (typeof h.elapsedSeconds === 'string' ? Number(h.elapsedSeconds) || 0 : 0);
+                const hEnd = hStart + (elapsedSec * 1000);
                 
                 if (!currentSpan) {
-                    currentSpan = { dept, start: shiftData.firstStartTime, end: hEnd };
+                    currentSpan = { dept, start: firstStart, end: hEnd };
                 } else {
                     if (currentSpan.dept === dept) {
                         currentSpan.end = hEnd;
@@ -75,10 +86,10 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
             
             if (currentSpan) {
                 if (currentSpan.dept === activeDept) {
-                    currentSpan.end = now.getTime();
+                    currentSpan.end = nowTime;
                 } else {
                     spans.push(currentSpan);
-                    currentSpan = { dept: activeDept, start: currentSpan.end, end: now.getTime() };
+                    currentSpan = { dept: activeDept, start: currentSpan.end, end: nowTime };
                 }
                 spans.push(currentSpan);
             }
@@ -89,10 +100,12 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         
         spans.forEach(span => {
             const sec = Math.max(0, (span.end - span.start) / 1000);
-            if (span.dept === 'aisles' || span.dept?.startsWith('aisle')) {
-                totalAislesSeconds += sec;
-            } else {
-                totalOtherSeconds += sec;
+            if (!isNaN(sec) && isFinite(sec)) {
+                if (span.dept === 'aisles' || span.dept?.startsWith('aisle')) {
+                    totalAislesSeconds += sec;
+                } else {
+                    totalOtherSeconds += sec;
+                }
             }
         });
         
@@ -100,15 +113,18 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         
         let exempt = totalBreaks;
         const detail = calculateAislesExemptionDetail(totalClockSeconds, warehouseConfig?.exemptionRules);
-        exempt += detail.total;
+        exempt += (detail?.total || 0);
 
-        const active = Math.max(1, totalClockSeconds - exempt);
+        const active = Math.max(1, totalClockSeconds - (isNaN(exempt) ? 0 : exempt));
+        const safeTotalClock = (isNaN(totalClockSeconds) || !isFinite(totalClockSeconds)) ? 0 : totalClockSeconds;
+        const safeActive = (isNaN(active) || !isFinite(active)) ? 0 : active;
+        const safeBreaks = (isNaN(totalBreaks) || !isFinite(totalBreaks)) ? 0 : totalBreaks;
         
         return {
-            totalShiftSeconds: totalClockSeconds,
-            totalBreakSeconds: totalBreaks,
-            activeElapsedSeconds: active,
-            activeElapsedHours: active / 3600,
+            totalShiftSeconds: safeTotalClock,
+            totalBreakSeconds: safeBreaks,
+            activeElapsedSeconds: safeActive,
+            activeElapsedHours: safeActive / 3600,
             aislesExemptionDetail: detail,
             spans
         };
@@ -230,7 +246,6 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         return result;
     }, [spans, totalShiftSeconds, shiftData.history, shiftData.isOnBreak, shiftData.breakStartTime, shiftData.department, now, targetRate, warehouseConfig]);
 
-    // Perfect weighted target seconds calculation based on multi-department work history
     const aggregateTargetSeconds = useMemo(() => {
         if (!shiftData.history || shiftData.history.length === 0) {
             return (shiftData.totalCases / targetRate) * 3600;
@@ -256,29 +271,24 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         return totalTargetSec;
     }, [shiftData.history, shiftData.totalCases, targetRate]);
 
-    // Dynamic, fair weighted target rate for comparison
     const weightedTargetRate = useMemo(() => {
         if (shiftData.totalCases === 0 || aggregateTargetSeconds === 0) return targetRate;
         return Math.round((shiftData.totalCases / aggregateTargetSeconds) * 3600);
     }, [shiftData.totalCases, aggregateTargetSeconds, targetRate]);
 
-    // Rate calculations
     const rate = useMemo(() => {
         if (shiftData.totalCases === 0 || activeElapsedHours === 0) return 0;
         return Math.round(shiftData.totalCases / activeElapsedHours);
     }, [shiftData.totalCases, activeElapsedHours]);
 
-    // Net time saved (in seconds)
     const net = useMemo(() => {
         if (shiftData.totalCases === 0) return 0;
         return Math.floor(aggregateTargetSeconds - activeElapsedSeconds);
     }, [shiftData.totalCases, aggregateTargetSeconds, activeElapsedSeconds]);
 
-    // Performance indicators
     const isRateGood = rate >= weightedTargetRate;
     const isNetGood = net >= 0;
 
-    // Consistency calculation
     const { consistencyPercent, shiftBestRate } = useMemo(() => {
         const historyRates = shiftData.history
             .filter(h => typeof h.rate === 'number' && h.rate > 0)
@@ -290,7 +300,6 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         const variance = historyRates.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / historyRates.length;
         const stdDev = Math.sqrt(variance);
         
-        // Simple formula for consistency: 100 - (CV * 100)
         const cv = stdDev / avg;
         const consistency = Math.max(0, Math.min(100, Math.floor(100 * (1 - cv))));
         
@@ -300,7 +309,6 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         };
     }, [shiftData.history]);
 
-    // Performance Trends (last 10 actual picks)
     const trendData = useMemo(() => {
         return shiftData.history
             .filter((h: any) => h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote)
@@ -312,7 +320,6 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
             }));
     }, [shiftData.history, targetRate]);
 
-    // Current Order Stats
     const { finishTime, timeRemainingSecs, currentTargetSeconds, isWarning } = useMemo(() => {
         if (!shiftData.pickStartTime || !shiftData.isPicking) return { finishTime: null, timeRemainingSecs: 0, currentTargetSeconds: 0, isWarning: false };
         
@@ -336,7 +343,6 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         };
     }, [shiftData.pickStartTime, shiftData.isPicking, shiftData.caseCount, shiftData.isOnBreak, shiftData.breakStartTime, shiftData.breakTimeDuringCurrentPick, targetRate, now]);
 
-    // Real-time projected rate and milestones for the active picking dashboard
     const { projectedRate, historicalAvg, isNewPb, personalBest } = useMemo(() => {
         const currentCases = parseInt(shiftData.caseCount || '0') || 0;
         const histAvg = rate > 0 ? rate : targetRate;
@@ -350,7 +356,6 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
             if (currentCases > 0) {
                 const deptTarget = getTargetRateForDept(shiftData.department || 'aisles', targetRate, warehouseConfig);
                 const targetSecs = (currentCases / deptTarget) * 3600;
-                // Live pace compares elapsed time against target order time to avoid artificial initial spikes
                 const effectiveSecs = Math.max(elapsedSec, targetSecs);
                 livePace = Math.round((currentCases / effectiveSecs) * 3600);
             }
@@ -386,9 +391,9 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         currentTargetSeconds,
         isWarning,
         isAisles,
-        accruedPrep: aislesExemptionDetail.prep,
+        accruedClockOut: aislesExemptionDetail.clockOut,
         accruedDinner: aislesExemptionDetail.dinner,
-        accruedCleanup: aislesExemptionDetail.cleanup,
+        accruedPostDinner: aislesExemptionDetail.postDinner,
         finalExemption: aislesExemptionDetail.total,
         projectedRate,
         historicalAvg,

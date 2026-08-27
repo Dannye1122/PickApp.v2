@@ -18,9 +18,9 @@ interface ShiftSummaryModalProps {
     activeElapsedSeconds: number;
     isAisles: boolean;
     finalExemption: number;
-    accruedPrep: number;
+    accruedPostDinner: number;
     accruedDinner: number;
-    accruedCleanup: number;
+    accruedClockOut: number;
     shiftNotes: string;
     setShiftNotes: (val: string) => void;
     updateShiftData: (data: any) => void;
@@ -42,9 +42,9 @@ export const ShiftSummaryModal: React.FC<ShiftSummaryModalProps> = ({
     activeElapsedSeconds,
     isAisles,
     finalExemption,
-    accruedPrep,
+    accruedPostDinner,
     accruedDinner,
-    accruedCleanup,
+    accruedClockOut,
     shiftNotes,
     setShiftNotes,
     updateShiftData,
@@ -99,9 +99,9 @@ export const ShiftSummaryModal: React.FC<ShiftSummaryModalProps> = ({
                             
                             <div className="space-y-1.5 text-slate-400 text-[10px] font-mono leading-relaxed select-none">
                                 <div className="flex justify-between">
-                                    <span>Prep (Max 10m):</span>
+                                    <span>Post-dinner (Max 10m):</span>
                                     <span className="text-slate-200 font-bold">
-                                        +{formatTime(isShiftFinalized ? calculateAislesExemptionDetail(finalizedStats?.totalSeconds || 0).prep : accruedPrep)}
+                                        +{formatTime(isShiftFinalized ? calculateAislesExemptionDetail(finalizedStats?.totalSeconds || 0).postDinner : accruedPostDinner)}
                                     </span>
                                 </div>
                                 <div className="flex justify-between">
@@ -111,9 +111,9 @@ export const ShiftSummaryModal: React.FC<ShiftSummaryModalProps> = ({
                                     </span>
                                 </div>
                                 <div className="flex justify-between">
-                                    <span>Cleanup (Max 5m):</span>
+                                    <span>Clock-out (Max 5m):</span>
                                     <span className="text-slate-200 font-bold">
-                                        +{formatTime(isShiftFinalized ? calculateAislesExemptionDetail(finalizedStats?.totalSeconds || 0).cleanup : accruedCleanup)}
+                                        +{formatTime(isShiftFinalized ? calculateAislesExemptionDetail(finalizedStats?.totalSeconds || 0).clockOut : accruedClockOut)}
                                     </span>
                                 </div>
                             </div>

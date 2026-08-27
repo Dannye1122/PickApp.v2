@@ -232,18 +232,18 @@ export const PerformanceDashboard = ({
                         </div>
                         
                         <div className="space-y-3">
-                            {/* Prep Accrual */}
+                            {/* Post-dinner Accrual */}
                             <div>
                                 <div className="flex justify-between items-center text-[10px] font-mono mb-1">
-                                    <span className="text-slate-500 uppercase tracking-tight">Mandatory Prep (Max 10m)</span>
+                                    <span className="text-slate-500 uppercase tracking-tight">Post-dinner (Max 10m)</span>
                                     <span className="text-slate-300 font-bold">
-                                        {formatTime(stats.accruedPrep)} / 10:00
+                                        {formatTime(stats.accruedPostDinner)} / 10:00
                                     </span>
                                 </div>
                                 <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
                                     <div 
                                         className="h-full bg-sky-500 rounded-full transition-all duration-500"
-                                        style={{ width: `${Math.min(100, (stats.accruedPrep / 600) * 100)}%` }}
+                                        style={{ width: `${Math.min(100, (stats.accruedPostDinner / 600) * 100)}%` }}
                                     />
                                 </div>
                             </div>
@@ -264,18 +264,18 @@ export const PerformanceDashboard = ({
                                 </div>
                             </div>
 
-                            {/* Cleanup Accrual */}
+                            {/* Clock-out Accrual */}
                             <div>
                                 <div className="flex justify-between items-center text-[10px] font-mono mb-1">
-                                    <span className="text-slate-500 uppercase tracking-tight">Cleanup Accrual (Max 5m)</span>
+                                    <span className="text-slate-500 uppercase tracking-tight">Clock-out (Max 5m)</span>
                                     <span className="text-slate-300 font-bold">
-                                        {formatTime(stats.accruedCleanup)} / 5:00
+                                        {formatTime(stats.accruedClockOut)} / 5:00
                                     </span>
                                 </div>
                                 <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
                                     <div 
                                         className="h-full bg-emerald-500 rounded-full transition-all duration-500"
-                                        style={{ width: `${Math.min(100, (stats.accruedCleanup / 300) * 100)}%` }}
+                                        style={{ width: `${Math.min(100, (stats.accruedClockOut / 300) * 100)}%` }}
                                     />
                                 </div>
                             </div>

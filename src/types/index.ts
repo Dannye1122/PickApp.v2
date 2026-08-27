@@ -57,12 +57,12 @@ export interface WarehouseSettings {
     };
     shiftTypes: string[];
     exemptionRules: {
-        prepLimitSeconds: number;
-        prepAccrualWindowSeconds: number;
+        clockOutLimitSeconds: number;
+        clockOutAccrualWindowSeconds: number;
         dinnerLimitSeconds: number;
         dinnerAccrualWindowSeconds: number;
-        cleanupLimitSeconds: number;
-        cleanupAccrualWindowSeconds: number;
+        postDinnerLimitSeconds: number;
+        postDinnerAccrualWindowSeconds: number;
     };
     subscriptionStatus: 'active' | 'past_due' | 'canceled';
     tierLevel: SubscriptionTier;

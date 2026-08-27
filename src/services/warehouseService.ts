@@ -15,12 +15,12 @@ const DEFAULT_SETTINGS: WarehouseSettings = {
     },
     shiftTypes: ['Morning', 'Afternoon', 'Twilight', 'Night'],
     exemptionRules: {
-        prepLimitSeconds: 600,
-        prepAccrualWindowSeconds: 1800,
+        clockOutLimitSeconds: 300,
+        clockOutAccrualWindowSeconds: 21600,
         dinnerLimitSeconds: 1800,
         dinnerAccrualWindowSeconds: 21600,
-        cleanupLimitSeconds: 300,
-        cleanupAccrualWindowSeconds: 21600
+        postDinnerLimitSeconds: 600,
+        postDinnerAccrualWindowSeconds: 1800
     },
     subscriptionStatus: 'active',
     tierLevel: 'enterprise',

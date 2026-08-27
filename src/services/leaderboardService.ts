@@ -267,7 +267,7 @@ export const clearLeaderboard = async () => {
 export const updateLiveStatus = async (user: string, rate: number, department: string, isActive: boolean, stats?: { totalCases: number, activeSeconds: number, steps?: number, xp?: number, status?: 'picking' | 'idle' | 'break' | 'finished', targetRate?: number, currentOrder?: string, customStatus?: string, listeningTo?: string }) => {
   try {
     if (!user) return;
-    if (user.toUpperCase().trim() === 'ADMIN') return;
+    // if (user.toUpperCase().trim() === 'ADMIN') return;
     const uid = auth.currentUser?.uid || 'local';
     const docId = `${user.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}_${uid.slice(0, 6)}`;
     
@@ -332,11 +332,10 @@ export const fetchLiveUsers = async (warehouseId: string, force: boolean = false
         ...(doc.data() as any)
       } as any));
 
-      // De-duplicate by name (most recent update wins), excluding ADMIN
+      // De-duplicate by name (most recent update wins)
       const uniqueUsers: Record<string, any> = {};
       rawUsers.forEach(user => {
         const name = (user.name || '').toUpperCase().trim();
-        if (name === 'ADMIN') return;
         if (!uniqueUsers[name] || 
             (user.lastUpdate?.seconds || 0) > (uniqueUsers[name].lastUpdate?.seconds || 0)) {
           uniqueUsers[name] = user;
@@ -371,11 +370,10 @@ export const subscribeToLiveUsers = (warehouseId: string, callback: (users: any[
       ...(doc.data() as any)
     }));
 
-    // De-duplicate by name (most recent update wins), excluding ADMIN
+    // De-duplicate by name (most recent update wins)
     const uniqueUsers: Record<string, any> = {};
     rawUsers.forEach(user => {
       const name = (user.name || '').toUpperCase().trim();
-      if (name === 'ADMIN') return;
       if (!uniqueUsers[name] || 
           (user.lastUpdate?.seconds || 0) > (uniqueUsers[name].lastUpdate?.seconds || 0)) {
         uniqueUsers[name] = user;
