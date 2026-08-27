@@ -309,22 +309,13 @@ export const fetchLiveUsers = async (warehouseId: string, force: boolean = false
     const cacheKey = `liveusers_${warehouseId}`;
     
     if (!canFetchData(cacheKey, force)) {
-      return getCachedData<any[]>(cacheKey) || [];
+      const cached = getCachedData<any[]>(cacheKey);
+      if (cached && cached.length > 0) return cached;
     }
 
     try {
       const liveRef = collection(db, 'leaderboard');
-      // Added warehouseId filter
-      let q;
-      // Filter for users active in the last 5 minutes (300,000 ms)
-      const fiveMinutesAgo = new Date(Date.now() - 300000);
-      
-      if (warehouseId && warehouseId.toUpperCase() !== 'ALL') {
-        q = query(liveRef, where('type', '==', 'live'), where('warehouseId', '==', warehouseId), where('lastUpdate', '>=', fiveMinutesAgo));
-      } else {
-        q = query(liveRef, where('type', '==', 'live'), where('lastUpdate', '>=', fiveMinutesAgo));
-      }
-      
+      const q = query(liveRef, where('type', '==', 'live'));
       const snapshot = await getDocs(q);
 
       const rawUsers = snapshot.docs.map(doc => ({
@@ -332,9 +323,18 @@ export const fetchLiveUsers = async (warehouseId: string, force: boolean = false
         ...(doc.data() as any)
       } as any));
 
+      const fiveMinutesAgoMs = Date.now() - 300000;
+      const recentUsers = rawUsers.filter(u => {
+        if (warehouseId && warehouseId.toUpperCase() !== 'ALL' && u.warehouseId && u.warehouseId.toUpperCase() !== warehouseId.toUpperCase()) {
+          return false;
+        }
+        const updateMs = u.lastUpdate?.seconds ? u.lastUpdate.seconds * 1000 : (typeof u.lastUpdate === 'number' ? u.lastUpdate : Date.now());
+        return updateMs >= fiveMinutesAgoMs;
+      });
+
       // De-duplicate by name (most recent update wins)
       const uniqueUsers: Record<string, any> = {};
-      rawUsers.forEach(user => {
+      recentUsers.forEach(user => {
         const name = (user.name || '').toUpperCase().trim();
         if (!uniqueUsers[name] || 
             (user.lastUpdate?.seconds || 0) > (uniqueUsers[name].lastUpdate?.seconds || 0)) {
@@ -350,19 +350,14 @@ export const fetchLiveUsers = async (warehouseId: string, force: boolean = false
       handleFirestoreError(error, OperationType.LIST, 'leaderboard');
       const cached = getCachedData<any[]>(cacheKey) || [];
       const liveBots = getDailyAILiveUsers();
-      return [...cached, ...liveBots];
+      const fallbackList = cached.length > 0 ? cached : liveBots;
+      return fallbackList;
     }
 };
 
 export const subscribeToLiveUsers = (warehouseId: string, callback: (users: any[]) => void) => {
   const liveRef = collection(db, 'leaderboard');
-  const fiveMinutesAgo = new Date(Date.now() - 300000);
-  let q;
-  if (warehouseId && warehouseId.toUpperCase() !== 'ALL') {
-    q = query(liveRef, where('type', '==', 'live'), where('warehouseId', '==', warehouseId), where('lastUpdate', '>=', fiveMinutesAgo));
-  } else {
-    q = query(liveRef, where('type', '==', 'live'), where('lastUpdate', '>=', fiveMinutesAgo));
-  }
+  const q = query(liveRef, where('type', '==', 'live'));
 
   return onSnapshot(q, (snapshot) => {
     const rawUsers = snapshot.docs.map(doc => ({
@@ -370,9 +365,18 @@ export const subscribeToLiveUsers = (warehouseId: string, callback: (users: any[
       ...(doc.data() as any)
     }));
 
+    const fiveMinutesAgoMs = Date.now() - 300000;
+    const recentUsers = rawUsers.filter(u => {
+      if (warehouseId && warehouseId.toUpperCase() !== 'ALL' && u.warehouseId && u.warehouseId.toUpperCase() !== warehouseId.toUpperCase()) {
+        return false;
+      }
+      const updateMs = u.lastUpdate?.seconds ? u.lastUpdate.seconds * 1000 : (typeof u.lastUpdate === 'number' ? u.lastUpdate : Date.now());
+      return updateMs >= fiveMinutesAgoMs;
+    });
+
     // De-duplicate by name (most recent update wins)
     const uniqueUsers: Record<string, any> = {};
-    rawUsers.forEach(user => {
+    recentUsers.forEach(user => {
       const name = (user.name || '').toUpperCase().trim();
       if (!uniqueUsers[name] || 
           (user.lastUpdate?.seconds || 0) > (uniqueUsers[name].lastUpdate?.seconds || 0)) {
@@ -388,9 +392,11 @@ export const subscribeToLiveUsers = (warehouseId: string, callback: (users: any[
     if (rawMsg.includes('Quota limit exceeded') || rawMsg.includes('Quota exceeded') || (error as any)?.code === 'resource-exhausted') {
       markQuotaExceeded();
       console.warn("[PickApp Guardian] Live users subscription paused due to quota limits.");
-      return;
+    } else {
+      console.warn("Live users subscription error fallback to bots:", error);
     }
-    console.error("Live users subscription error", error);
+    const liveBots = getDailyAILiveUsers();
+    callback(liveBots);
   });
 };
 

@@ -27,7 +27,34 @@ export function useShiftNotifications({ operatorName, showToast }: UseShiftNotif
   const loadShiftNotifications = useCallback(async (userName: string) => {
     if (!userName) return;
     try {
-      const list = await getLocalNotifications(userName);
+      let list = await getLocalNotifications(userName);
+      if (!list || list.length === 0) {
+        const safeName = userName.toUpperCase().trim();
+        const defaultNotifs: ShiftNotification[] = [
+          {
+            id: `init_shift_${Date.now()}_1`,
+            operator: safeName,
+            category: 'milestone',
+            title: '⚡ Shift Engine Active',
+            message: 'Precision picking session active. Warehouse target rate: 200 P/H.',
+            timestamp: Date.now() - 300000,
+            isRead: false
+          },
+          {
+            id: `init_bots_${Date.now()}_2`,
+            operator: safeName,
+            category: 'peer',
+            title: '🤖 Live Benchmark Bots Active',
+            message: 'HyperBot and ApexRobo are live on the floor in Ambient Aisles.',
+            timestamp: Date.now() - 120000,
+            isRead: false
+          }
+        ];
+        for (const notif of defaultNotifs) {
+          try { await saveLocalNotification(notif); } catch(e) {}
+        }
+        list = defaultNotifs;
+      }
       setShiftNotifications(list || []);
     } catch (err) {
       console.warn('Failed to load notifications from IndexedDB:', err);
