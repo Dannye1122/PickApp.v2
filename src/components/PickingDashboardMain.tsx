@@ -496,12 +496,20 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
                                                 </button>
                                             )}
                                             
-                                            <button 
-                                                className={`w-full mt-4 py-5 bg-slate-900 text-slate-300 ${theme.radius} font-black text-sm tracking-widest uppercase hover:bg-slate-800 active:scale-[0.98] transition-all flex items-center justify-center gap-3 border border-slate-800 shadow-lg min-h-[60px]`}
-                                                onClick={startPaidBreak}
-                                            >
-                                                <Coffee size={20} className="text-amber-500" /> START PAID BREAK
-                                            </button>
+                                            <div className="mt-4 flex flex-col gap-2">
+                                                <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 flex items-center gap-3">
+                                                    <AlertCircle size={18} className="text-amber-500 shrink-0" />
+                                                    <p className="text-[10px] text-amber-500 font-bold uppercase tracking-widest leading-relaxed">
+                                                        Press BREAK for Dinner (30m max)
+                                                    </p>
+                                                </div>
+                                                <button 
+                                                    className={`w-full py-5 bg-slate-900 text-slate-300 ${theme.radius} font-black text-sm tracking-widest uppercase hover:bg-slate-800 active:scale-[0.98] transition-all flex items-center justify-center gap-3 border border-slate-800 shadow-lg min-h-[60px]`}
+                                                    onClick={startPaidBreak}
+                                                >
+                                                    <Coffee size={20} className="text-amber-500" /> START PAID BREAK
+                                                </button>
+                                            </div>
                                         </>
                                     ) : (
                                         <button 

@@ -1769,7 +1769,7 @@ export default function App() {
 
         doc.setFontSize(9);
         doc.setFont("helvetica", "normal");
-        const logicText = "The application isolates Pure Selection from Logistical Tasks. For Chiller/Freezer, a 180s (3-minute) gap timer applies between orders. For Aisles, there is no manual gap timer; instead, a 45-minute PWA Exemption (10m prep, 30m dinner, 5m cleanup) is automatically and linearly accrued over your shift and excluded from your active selection time.";
+        const logicText = "The application isolates Pure Selection from Logistical Tasks. For Chiller/Freezer, a 180s (3-minute) gap timer applies between orders. For Aisles, there is no manual gap timer; instead, a 45-minute PWA Exemption (5m clock-out, 30m dinner, 10m post-dinner) is applied. IMPORTANT: You MUST press the BREAK button for your dinner; any time exceeding 30 minutes is added back to your active selection time.";
         doc.text(doc.splitTextToSize(logicText, 170), 20, yPos);
         
         yPos += 20;
