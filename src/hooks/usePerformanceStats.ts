@@ -41,7 +41,13 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
             return { totalShiftSeconds: 0, totalBreakSeconds: 0, activeElapsedSeconds: 0, activeElapsedHours: 0, aislesExemptionDetail: calculateAislesExemptionDetail(0, warehouseConfig?.exemptionRules), spans: [] as { dept: string, start: number, end: number }[] };
         }
         
-        const nowTime = (now && typeof now.getTime === 'function' && !isNaN(now.getTime())) ? now.getTime() : Date.now();
+        let effectiveNow = (now && typeof now.getTime === 'function' && !isNaN(now.getTime())) ? now.getTime() : Date.now();
+        if (shiftData.isShiftFinalized && shiftData.lastStopTimestamp) {
+            effectiveNow = shiftData.lastStopTimestamp;
+        } else if (shiftData.pickPhaseEndTime) {
+            effectiveNow = shiftData.pickPhaseEndTime;
+        }
+        const nowTime = effectiveNow;
         
         let currentBreak = 0;
         if (shiftData.isOnBreak && shiftData.breakStartTime) {
@@ -128,7 +134,7 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
             aislesExemptionDetail: detail,
             spans
         };
-    }, [shiftData.firstStartTime, shiftData.totalExcludedTime, shiftData.isOnBreak, shiftData.breakStartTime, shiftData.department, shiftData.history, shiftData.isPicking, shiftData.pickStartTime, shiftData.isShiftFinalized, shiftData.lastStopTimestamp, now, warehouseConfig]);
+    }, [shiftData.firstStartTime, shiftData.pickPhaseEndTime, shiftData.totalExcludedTime, shiftData.isOnBreak, shiftData.breakStartTime, shiftData.department, shiftData.history, shiftData.isPicking, shiftData.pickStartTime, shiftData.isShiftFinalized, shiftData.lastStopTimestamp, now, warehouseConfig]);
 
     const { totalShiftSeconds, totalBreakSeconds, activeElapsedSeconds, activeElapsedHours, aislesExemptionDetail, spans } = statsSummary;
 

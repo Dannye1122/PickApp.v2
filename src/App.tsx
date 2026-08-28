@@ -2223,6 +2223,20 @@ export default function App() {
         setShowClockInModal(false);
     };
 
+    const finishPickPhase = () => {
+        haptic('medium');
+        updateShiftData({
+            pickPhaseEndTime: now.getTime()
+        });
+    };
+
+    const undoFinishPickPhase = () => {
+        haptic('light');
+        updateShiftData({
+            pickPhaseEndTime: null
+        });
+    };
+
     const startPick = () => {
         const cases = parseInt(caseCount);
         if (!cases || isNaN(cases)) {
@@ -3658,6 +3672,8 @@ export default function App() {
                         setShiftNotes={setShiftNotes}
                         saveStandaloneNote={saveStandaloneNote}
                         startPick={startPick}
+                        finishPickPhase={finishPickPhase}
+                        undoFinishPickPhase={undoFinishPickPhase}
                         stopPick={stopPick}
                         startPaidBreak={startPaidBreak}
                         stopPaidBreak={stopPaidBreak}

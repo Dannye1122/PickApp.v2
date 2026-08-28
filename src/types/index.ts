@@ -89,6 +89,7 @@ export interface ShiftData {
     isShiftFinalized: boolean;
     finalizedStats: any | null;
     endTime?: number;
+    pickPhaseEndTime?: number | null;
     tempGap: string;
     caseCount: string;
     pickStartTime: number | null;

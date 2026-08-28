@@ -65,6 +65,8 @@ export interface PickingDashboardMainProps {
     setShiftNotes: (val: string) => void;
     saveStandaloneNote: () => void;
     startPick: () => void;
+    finishPickPhase: () => void;
+    undoFinishPickPhase: () => void;
     stopPick: () => void;
     startPaidBreak: () => void;
     stopPaidBreak: () => void;
@@ -133,6 +135,8 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
     setShiftNotes,
     saveStandaloneNote,
     startPick,
+    finishPickPhase,
+    undoFinishPickPhase,
     stopPick,
     startPaidBreak,
     stopPaidBreak,
@@ -503,12 +507,29 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
                                     {!isOnBreak ? (
                                         <>
                                             {!isPicking ? (
-                                                <button 
-                                                    className={`w-full py-5 bg-emerald-500 text-slate-900 ${theme.radius} font-black text-xl tracking-tighter hover:bg-emerald-400 active:scale-[0.98] transition-all shadow-xl shadow-emerald-500/10 flex items-center justify-center gap-3 min-h-[68px] italic`}
-                                                    onClick={startPick}
-                                                >
-                                                    <Play fill="currentColor" size={24} /> START PICKING
-                                                </button>
+                                                <div className="flex flex-col gap-2">
+                                                    <button 
+                                                        className={`w-full py-5 bg-emerald-500 text-slate-900 ${theme.radius} font-black text-xl tracking-tighter hover:bg-emerald-400 active:scale-[0.98] transition-all shadow-xl shadow-emerald-500/10 flex items-center justify-center gap-3 min-h-[68px] italic`}
+                                                        onClick={startPick}
+                                                    >
+                                                        <Play fill="currentColor" size={24} /> START PICKING
+                                                    </button>
+                                                    {!shiftData.pickPhaseEndTime ? (
+                                                        <button 
+                                                            className={`w-full py-4 bg-slate-800 text-slate-300 ${theme.radius} font-black text-sm uppercase tracking-widest hover:bg-slate-700 active:scale-[0.98] transition-all flex items-center justify-center gap-3 border border-slate-700 shadow-lg`}
+                                                            onClick={finishPickPhase}
+                                                        >
+                                                            <CheckCircle size={18} /> FINISH PICK PHASE
+                                                        </button>
+                                                    ) : (
+                                                        <button 
+                                                            className={`w-full py-4 bg-amber-500/10 text-amber-500 ${theme.radius} font-black text-sm uppercase tracking-widest hover:bg-amber-500/20 active:scale-[0.98] transition-all flex items-center justify-center gap-3 border border-amber-500/20 shadow-lg`}
+                                                            onClick={undoFinishPickPhase}
+                                                        >
+                                                            <CheckCircle size={18} /> RESUME PICK PHASE
+                                                        </button>
+                                                    )}
+                                                </div>
                                             ) : (
                                                 <button 
                                                     className={`w-full py-5 bg-red-500 text-white ${theme.radius} font-black text-xl tracking-tighter hover:bg-red-400 active:scale-[0.98] transition-all shadow-xl shadow-red-500/10 flex items-center justify-center gap-3 min-h-[68px] italic`}
