@@ -210,12 +210,6 @@ class SyncManager {
 
     public async sync() {
         if (this.isSyncing || this.queue.length === 0 || !navigator.onLine || isQuotaExceeded()) return;
-        
-        // Wait until firebase auth is initialized before syncing
-        if (!auth.currentUser) {
-            // SyncManager: Waiting for authentication before syncing...
-            return;
-        }
 
         this.isSyncing = true;
         // Starting sync for items...
