@@ -3129,6 +3129,13 @@ export default function App() {
             setShiftData(nextData);
             setShowSummary(false);
             
+            // Clear draft notes and local store draft storage for fresh shift
+            localStorage.removeItem('draft_operatorNote');
+            localStorage.removeItem('draft_lane1');
+            localStorage.removeItem('draft_lane2');
+            localStorage.removeItem('draft_lane3');
+            localStorage.removeItem('draft_lane4');
+
             // Process the pending signout intent if the user chose Sign Out & Finish
             if (sessionStorage.getItem('pendingSignOut') === 'true') {
                 try {
@@ -3141,15 +3148,6 @@ export default function App() {
                 }
                 setIsAuthenticated(false);
             }
-            
-            // Try to exit app (for PWA / APK context)
-            try { 
-                if (window.navigator && (window.navigator as any).app && (window.navigator as any).app.exitApp) {
-                     (window.navigator as any).app.exitApp();
-                } else {
-                     window.close(); 
-                }
-            } catch(e) {}
             
             // --- endShift completed ---
         } catch (e) {

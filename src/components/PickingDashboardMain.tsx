@@ -725,7 +725,7 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
                                     </button>
                                     <button 
                                         className={`flex-1 py-4 ${theme.bg} text-white rounded-2xl font-semibold text-sm tracking-wide ${theme.bgHover} active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-lg ${theme.shadow}`}
-                                        onClick={handleEndOfDay}
+                                        onClick={() => handleEndOfDay(false)}
                                     >
                                         <CheckCircle size={18} /> Clock Out Now
                                     </button>

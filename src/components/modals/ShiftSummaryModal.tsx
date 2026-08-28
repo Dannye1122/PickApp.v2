@@ -266,7 +266,7 @@ export const ShiftSummaryModal: React.FC<ShiftSummaryModalProps> = ({
                         className={`flex-1 py-3.5 text-white rounded-2xl font-semibold tracking-wide transition-all shadow-lg bg-emerald-500 hover:bg-emerald-400 shadow-emerald-500/20 min-w-[100px]`}
                         onClick={endShift}
                     >
-                        FINISH & EXIT
+                        START NEXT SHIFT
                     </button>
                 </div>
             </div>

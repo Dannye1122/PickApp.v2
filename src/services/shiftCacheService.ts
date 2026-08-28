@@ -157,11 +157,7 @@ class ShiftCacheService {
       return this.monthCache.get(cacheKey)!;
     }
 
-    // 2. Query Firestore once with bounded date range
     const monthStr = month.toString().padStart(2, '0');
-    const startOfMonth = `${year}-${monthStr}-01`;
-    const endOfMonth = `${year}-${monthStr}-31`;
-
     const shiftsMap = new Map<string, ShiftRecord>();
 
     try {
@@ -171,12 +167,10 @@ class ShiftCacheService {
         currentName.charAt(0).toUpperCase() + currentName.slice(1).toLowerCase()
       ]));
 
-      // Query shift_summaries collection bounded by date range
+      // Query shift_summaries collection by userName only to avoid requiring Firestore composite indexes
       const q = query(
         collection(db, 'shift_summaries'),
-        where('userName', 'in', nameVariants.slice(0, 10)),
-        where('date', '>=', startOfMonth),
-        where('date', '<=', endOfMonth)
+        where('userName', 'in', nameVariants.slice(0, 10))
       );
 
       const snapshot = await getDocs(q);
@@ -319,24 +313,26 @@ class ShiftCacheService {
       return this.photoCache.get(photoKey)!;
     }
 
-    // 2. Query Firestore 'shift_photos'
-    const nameVariants = Array.from(new Set([
+    // 2. Query Firestore 'shift_photos' by shiftDate only to avoid composite index requirements
+    const nameVariants = new Set([
       currentName,
       currentName.toLowerCase(),
       currentName.charAt(0).toUpperCase() + currentName.slice(1).toLowerCase()
-    ]));
+    ]);
 
     try {
       const q = query(
         collection(db, 'shift_photos'),
-        where('shiftDate', '==', normDate),
-        where('userName', 'in', nameVariants.slice(0, 10))
+        where('shiftDate', '==', normDate)
       );
 
       const snap = await getDocs(q);
       const photos: ShiftPhotoRecord[] = [];
       snap.forEach(d => {
-        photos.push(d.data() as ShiftPhotoRecord);
+        const pData = d.data() as ShiftPhotoRecord;
+        if (!pData.userName || nameVariants.has(pData.userName.toUpperCase().trim()) || nameVariants.has(pData.userName)) {
+          photos.push(pData);
+        }
       });
 
       // Local IndexedDB fallback so label pictures are never lost
