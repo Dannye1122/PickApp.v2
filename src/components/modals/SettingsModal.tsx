@@ -503,7 +503,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                                                         <div key={key} className="flex justify-between items-center bg-slate-900 px-4 py-2.5 rounded-2xl border border-slate-800/60 hover:border-slate-700 transition-colors">
                                                                             <span className="text-[11px] text-slate-300 font-black tracking-tight">{d.name}</span>
                                                                             <div className="flex items-center gap-3">
-                                                                                {(key === 'aisles' || key.startsWith('aisle')) && <span className="text-[8px] bg-sky-500/10 text-sky-400 px-2 py-0.5 rounded-lg border border-sky-400/20 font-black">+45M BUF</span>}
+                                                                                {(key === 'aisles' || key.toLowerCase().startsWith('aisle')) && <span className="text-[8px] bg-sky-500/10 text-sky-400 px-2 py-0.5 rounded-lg border border-sky-400/20 font-black">+45M BUF</span>}
                                                                                 <span className="text-[11px] text-white font-black italic tracking-widest">{targetVal} PH</span>
                                                                             </div>
                                                                         </div>

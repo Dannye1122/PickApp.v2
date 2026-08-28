@@ -297,9 +297,9 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
                         />
                         <MetricCard 
                             label="Net Saved"
-                            value={`${net >= 0 ? "+" : "-"}${formatTime(Math.abs(net))}`}
-                            subValue="Total Shift Vs Target"
-                            isGood={isNetGood}
+                            value={`${(statsMode === 'dept' ? currentDeptStats.net : net) >= 0 ? "+" : "-"}${formatTime(Math.abs(statsMode === 'dept' ? currentDeptStats.net : net))}`}
+                            subValue={statsMode === 'dept' ? `${getDeptName(shiftData.department)} Vs Target` : "Total Shift Vs Target"}
+                            isGood={statsMode === 'dept' ? currentDeptStats.isNetGood : isNetGood}
                             icon={<Clock size={14} />}
                             theme={theme}
                         />

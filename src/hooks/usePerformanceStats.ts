@@ -31,7 +31,7 @@ const getTargetRateForDept = (deptKey: string, fallback: number = 220, warehouse
 
 export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate: number, warehouseConfig?: WarehouseSettings | null) => {
     
-    const isAisles = shiftData.department === 'aisles' || shiftData.department?.startsWith('aisle');
+    const isAisles = shiftData.department === 'aisles' || shiftData.department?.toLowerCase().startsWith('aisle');
 
     const statsSummary = useMemo(() => {
         const rawFirstStart = shiftData.firstStartTime;
@@ -107,7 +107,7 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         spans.forEach(span => {
             const sec = Math.max(0, (span.end - span.start) / 1000);
             if (!isNaN(sec) && isFinite(sec)) {
-                if (span.dept === 'aisles' || span.dept?.startsWith('aisle')) {
+                if (span.dept === 'aisles' || span.dept?.toLowerCase().startsWith('aisle')) {
                     totalAislesSeconds += sec;
                 } else {
                     totalOtherSeconds += sec;
