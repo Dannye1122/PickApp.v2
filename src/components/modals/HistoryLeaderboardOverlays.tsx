@@ -17,10 +17,11 @@ export interface HistoryLeaderboardOverlaysProps {
     // Clock In Modal
     showClockInModal: boolean;
     setShowClockInModal: (val: boolean) => void;
-    manualClockType: 'in' | 'out';
+    manualClockType: 'in' | 'out' | 'pick_start';
     manualClockTime: string;
     setManualClockTime: (val: string) => void;
     manualStart: (timeStr: string) => void;
+    manualPickStart: (timeStr: string) => void;
     manualEnd: (timeStr: string) => void;
 
     // Leaderboard Modal
@@ -89,6 +90,7 @@ export const HistoryLeaderboardOverlays: React.FC<HistoryLeaderboardOverlaysProp
     manualClockTime,
     setManualClockTime,
     manualStart,
+    manualPickStart,
     manualEnd,
     showLeaderboard,
     setShowLeaderboard,
@@ -147,6 +149,8 @@ export const HistoryLeaderboardOverlays: React.FC<HistoryLeaderboardOverlaysProp
                 onConfirm={(type, time) => {
                     if (type === 'in') {
                         manualStart(time);
+                    } else if (type === 'pick_start') {
+                        manualPickStart(time);
                     } else {
                         manualEnd(time);
                     }

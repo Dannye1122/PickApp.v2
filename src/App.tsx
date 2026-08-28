@@ -619,7 +619,7 @@ export default function App() {
     const [liveUsers, setLiveUsers] = useState<any[]>([]);
     const [shiftSummaries, setShiftSummaries] = useState<ShiftSummary[]>([]);
     const [adminAllSummaries, setAdminAllSummaries] = useState<ShiftSummary[]>([]);
-    const [manualClockType, setManualClockType] = useState<'in' | 'out'>('in');
+    const [manualClockType, setManualClockType] = useState<'in' | 'out' | 'pick_start'>('in');
     
     const [isAppBlocked, setIsAppBlocked] = useState(false);
     const [minAllowedVersion, setMinAllowedVersion] = useState('');
@@ -2187,6 +2187,25 @@ export default function App() {
         setShowClockInModal(false);
     };
 
+    const manualPickStart = (timeStr: string) => {
+        const [hours, minutes] = timeStr.split(':').map(Number);
+        const startTime = new Date();
+        startTime.setHours(hours, minutes, 0, 0);
+        
+        const currentTime = new Date().getTime();
+        
+        if (startTime.getTime() > currentTime) {
+            startTime.setDate(startTime.getDate() - 1);
+        }
+        
+        haptic('medium');
+        setShiftData((prev: any) => ({ 
+            ...prev, 
+            firstStartTime: startTime.getTime(),
+        }));
+        setShowClockInModal(false);
+    };
+
     const manualEnd = (timeStr: string) => {
         const [hours, minutes] = timeStr.split(':').map(Number);
         const endTime = new Date();
@@ -3725,6 +3744,7 @@ export default function App() {
                         manualClockTime={manualClockTime}
                         setManualClockTime={setManualClockTime}
                         manualStart={manualStart}
+                        manualPickStart={manualPickStart}
                         manualEnd={manualEnd}
                         showLeaderboard={showLeaderboard}
                         setShowLeaderboard={setShowLeaderboard}

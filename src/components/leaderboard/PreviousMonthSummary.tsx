@@ -74,11 +74,41 @@ export const PreviousMonthSummary: React.FC<PreviousMonthSummaryProps> = ({
         const pad = (n: number) => String(n).padStart(2, '0');
         const targetPrefix = `${selectedYear}-${pad(selectedMonth + 1)}`; // e.g. "2026-07"
 
+        // Deduplicate summaries by user and date to handle multiple fragments per day
+        const deduplicatedShifts = new Map<string, any>();
+        
         summaries.forEach((s) => {
             if (!s.date || !s.userName) return;
             const name = s.userName.trim().toUpperCase();
             if (name === 'ADMIN') return;
 
+            let normDate = s.date;
+            if (s.date.includes('/')) {
+                const parts = s.date.split('/');
+                if (parts.length === 3) normDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+            } else if (s.date.includes('-')) {
+                // Keep YYYY-MM-DD
+                normDate = s.date;
+            }
+
+            const key = `${name}_${normDate}`;
+            const existing = deduplicatedShifts.get(key);
+            
+            const cases = s.totalCases || s.cases || 0;
+            const activeSec = s.activeSeconds || s.totalSeconds || 0;
+
+            if (!existing) {
+                deduplicatedShifts.set(key, { ...s, _normDate: normDate, _cases: cases, _activeSec: activeSec });
+            } else {
+                if (cases > existing._cases || (cases === existing._cases && activeSec > existing._activeSec)) {
+                    deduplicatedShifts.set(key, { ...s, _normDate: normDate, _cases: cases, _activeSec: activeSec });
+                }
+            }
+        });
+
+        Array.from(deduplicatedShifts.values()).forEach((s) => {
+            const name = s.userName.trim().toUpperCase();
+            
             // Check if summary belongs to target month
             // Date format could be YYYY-MM-DD or DD/MM/YYYY
             let shiftYear = 0;
@@ -112,8 +142,8 @@ export const PreviousMonthSummary: React.FC<PreviousMonthSummaryProps> = ({
                 }
 
                 const entry = userMap.get(name)!;
-                const cases = s.totalCases || 0;
-                const activeSec = s.activeSeconds || s.totalSeconds || 0;
+                const cases = s._cases;
+                const activeSec = s._activeSec;
                 const rate = s.finalRate || (activeSec > 0 ? (cases / activeSec) * 3600 : 0);
 
                 entry.totalCases += cases;

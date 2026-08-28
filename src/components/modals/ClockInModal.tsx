@@ -5,11 +5,11 @@ import { haptic } from '../../services/hapticService';
 interface ClockInModalProps {
     isOpen: boolean;
     onClose: () => void;
-    manualClockType: 'in' | 'out';
+    manualClockType: 'in' | 'out' | 'pick_start';
     manualClockTime: string;
     setManualClockTime: (time: string) => void;
     theme: any;
-    onConfirm: (type: 'in' | 'out', time: string) => void;
+    onConfirm: (type: 'in' | 'out' | 'pick_start', time: string) => void;
 }
 
 export const ClockInModal: React.FC<ClockInModalProps> = ({
@@ -27,13 +27,15 @@ export const ClockInModal: React.FC<ClockInModalProps> = ({
         <div className="fixed inset-0 bg-slate-950/90 z-[100] flex items-center justify-center p-6 backdrop-blur-md">
             <div className="bg-slate-900 w-full max-w-sm rounded-[32px] p-6 border border-slate-800 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
                 <div className="text-center mb-6">
-                    <div className={`w-12 h-12 rounded-2xl ${manualClockType === 'in' ? 'bg-slate-800 text-emerald-400' : 'bg-orange-500/20 text-orange-400'} flex items-center justify-center mx-auto mb-3`}>
+                    <div className={`w-12 h-12 rounded-2xl ${manualClockType === 'in' ? 'bg-slate-800 text-emerald-400' : manualClockType === 'pick_start' ? 'bg-slate-800 text-sky-400' : 'bg-orange-500/20 text-orange-400'} flex items-center justify-center mx-auto mb-3`}>
                         <Clock size={24} />
                     </div>
-                    <h3 className="text-xl font-bold text-white mb-1">Manual Clock {manualClockType === 'in' ? 'In' : 'Out'}</h3>
+                    <h3 className="text-xl font-bold text-white mb-1">Manual {manualClockType === 'in' ? 'Clock In' : manualClockType === 'pick_start' ? 'Pick Start' : 'Clock Out'}</h3>
                     <p className="text-slate-400 text-xs text-balance">
                         {manualClockType === 'in' 
                             ? 'Input the time you actually clocked in to start your shift tracking.'
+                            : manualClockType === 'pick_start'
+                            ? 'Update the time you started picking to recalculate your rate.'
                             : 'Update the time you finished your shift for final stats calculation.'}
                     </p>
                 </div>
@@ -58,7 +60,7 @@ export const ClockInModal: React.FC<ClockInModalProps> = ({
                             onConfirm(manualClockType, manualClockTime);
                         }}
                     >
-                        {manualClockType === 'in' ? 'START' : 'FINISH'}
+                        {manualClockType === 'in' ? 'START SHIFT' : manualClockType === 'pick_start' ? 'UPDATE' : 'FINISH'}
                     </button>
                 </div>
             </div>

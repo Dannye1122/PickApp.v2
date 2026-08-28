@@ -328,7 +328,20 @@ export const fetchLiveUsers = async (warehouseId: string, force: boolean = false
         if (warehouseId && warehouseId.toUpperCase() !== 'ALL' && u.warehouseId && u.warehouseId.toUpperCase() !== warehouseId.toUpperCase()) {
           return false;
         }
-        const updateMs = u.lastUpdate?.seconds ? u.lastUpdate.seconds * 1000 : (typeof u.lastUpdate === 'number' ? u.lastUpdate : Date.now());
+        
+        let updateMs = Date.now();
+        if (u.lastUpdate) {
+            if (typeof u.lastUpdate.toMillis === 'function') {
+                updateMs = u.lastUpdate.toMillis();
+            } else if (u.lastUpdate.seconds) {
+                updateMs = u.lastUpdate.seconds * 1000;
+            } else if (typeof u.lastUpdate === 'number') {
+                updateMs = u.lastUpdate;
+            } else if (u.lastUpdate instanceof Date) {
+                updateMs = u.lastUpdate.getTime();
+            }
+        }
+        
         return updateMs >= fiveMinutesAgoMs;
       });
 
@@ -368,18 +381,57 @@ export const subscribeToLiveUsers = (warehouseId: string, callback: (users: any[
     const fiveMinutesAgoMs = Date.now() - 300000;
     const recentUsers = rawUsers.filter(u => {
       if (warehouseId && warehouseId.toUpperCase() !== 'ALL' && u.warehouseId && u.warehouseId.toUpperCase() !== warehouseId.toUpperCase()) {
+        console.log("Filtered out due to warehouse mismatch:", u);
         return false;
       }
-      const updateMs = u.lastUpdate?.seconds ? u.lastUpdate.seconds * 1000 : (typeof u.lastUpdate === 'number' ? u.lastUpdate : Date.now());
-      return updateMs >= fiveMinutesAgoMs;
+      
+      let updateMs = Date.now();
+      if (u.lastUpdate) {
+          if (typeof u.lastUpdate.toMillis === 'function') {
+              updateMs = u.lastUpdate.toMillis();
+          } else if (u.lastUpdate.seconds) {
+              updateMs = u.lastUpdate.seconds * 1000;
+          } else if (typeof u.lastUpdate === 'number') {
+              updateMs = u.lastUpdate;
+          } else if (u.lastUpdate instanceof Date) {
+              updateMs = u.lastUpdate.getTime();
+          }
+      }
+      
+      const isRecent = updateMs >= fiveMinutesAgoMs;
+      if (!isRecent) {
+          console.log("Filtered out due to time:", u.name, "UpdateMs:", updateMs, "FiveMinsAgo:", fiveMinutesAgoMs);
+      }
+      return isRecent;
     });
+
+    console.log("Recent live users:", recentUsers);
 
     // De-duplicate by name (most recent update wins)
     const uniqueUsers: Record<string, any> = {};
     recentUsers.forEach(user => {
       const name = (user.name || '').toUpperCase().trim();
-      if (!uniqueUsers[name] || 
-          (user.lastUpdate?.seconds || 0) > (uniqueUsers[name].lastUpdate?.seconds || 0)) {
+      
+      let userUpdateMs = Date.now();
+      if (user.lastUpdate) {
+          if (typeof user.lastUpdate.toMillis === 'function') userUpdateMs = user.lastUpdate.toMillis();
+          else if (user.lastUpdate.seconds) userUpdateMs = user.lastUpdate.seconds * 1000;
+          else if (typeof user.lastUpdate === 'number') userUpdateMs = user.lastUpdate;
+          else if (user.lastUpdate instanceof Date) userUpdateMs = user.lastUpdate.getTime();
+      }
+
+      let existingUpdateMs = 0;
+      if (uniqueUsers[name] && uniqueUsers[name].lastUpdate) {
+          const eu = uniqueUsers[name];
+          if (typeof eu.lastUpdate.toMillis === 'function') existingUpdateMs = eu.lastUpdate.toMillis();
+          else if (eu.lastUpdate.seconds) existingUpdateMs = eu.lastUpdate.seconds * 1000;
+          else if (typeof eu.lastUpdate === 'number') existingUpdateMs = eu.lastUpdate;
+          else if (eu.lastUpdate instanceof Date) existingUpdateMs = eu.lastUpdate.getTime();
+      } else if (uniqueUsers[name] && !uniqueUsers[name].lastUpdate) {
+          existingUpdateMs = Date.now();
+      }
+
+      if (!uniqueUsers[name] || userUpdateMs > existingUpdateMs) {
         uniqueUsers[name] = user;
       }
     });
@@ -982,7 +1034,12 @@ export const fetchShiftSummaries = async (userName: string, force: boolean = fal
         const localKey = `shift_history_${safeName}`;
         const localData = localStorage.getItem(localKey);
         const localSummaries = localData ? JSON.parse(localData) : [];
-        const combinedLocal = [...localSummaries];
+        let idbShifts: any[] = [];
+        try {
+          idbShifts = await getLocalShiftSummaries(safeName) || [];
+        } catch(e) {}
+        
+        const combinedLocal = [...localSummaries, ...idbShifts];
 
         const merged = [...summaries];
         combinedLocal.forEach((local: any) => {
@@ -1503,7 +1560,7 @@ export const fetchAllShiftSummaries = async (force: boolean = false): Promise<Sh
     );
     
     const snapshot = await getDocs(q);
-    let summaries = snapshot.docs.map(doc => {
+    let rawSummaries = snapshot.docs.map(doc => {
       const data = doc.data() as any;
       // Strip large image/screenshot payloads to prevent local storage quota overflow
       delete data.screenshot;
@@ -1516,6 +1573,40 @@ export const fetchAllShiftSummaries = async (force: boolean = false): Promise<Sh
       return { id: doc.id, ...data, clockInTime, clockOutTime } as ShiftSummary;
     });
     
+    // Deduplicate by user and date to avoid inflating shift counts and total cases
+    const deduplicated = new Map<string, ShiftSummary>();
+    rawSummaries.forEach(s => {
+        if (!s.date || !s.userName) return;
+        const name = s.userName.trim().toUpperCase();
+        
+        let normDate = s.date;
+        if (normDate.includes('/')) {
+            const parts = normDate.split('/');
+            if (parts.length === 3) normDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+        } else if (normDate.includes('-')) {
+            normDate = normDate.split('T')[0];
+        }
+        
+        const key = `${name}_${normDate}`;
+        const existing = deduplicated.get(key);
+        
+        const cases = s.totalCases || (s as any).cases || 0;
+        const activeSec = s.activeSeconds || (s as any).totalSeconds || 0;
+        
+        if (!existing) {
+            deduplicated.set(key, s);
+        } else {
+            const existingCases = existing.totalCases || (existing as any).cases || 0;
+            const existingActiveSec = existing.activeSeconds || (existing as any).totalSeconds || 0;
+            
+            if (cases > existingCases || (cases === existingCases && activeSec > existingActiveSec)) {
+                deduplicated.set(key, s);
+            }
+        }
+    });
+    
+    let summaries = Array.from(deduplicated.values());
+
     // Sort descending by date/clockInTime/timestamp
     summaries.sort((a: any, b: any) => {
       const aTime = a.clockInTime || (a.timestamp?.seconds ? a.timestamp.seconds * 1000 : (a.date ? new Date(a.date).getTime() : 0));

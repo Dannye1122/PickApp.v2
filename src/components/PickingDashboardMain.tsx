@@ -348,6 +348,28 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
                             </div>
                         ) : (
                             <div className="space-y-4">
+                                {shiftData.firstStartTime && (
+                                    <div className="flex items-center justify-between bg-slate-950 p-3 border border-slate-800 rounded-xl mb-4">
+                                        <div className="flex flex-col">
+                                            <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Active Pick Start</span>
+                                            <span className="text-white font-bold text-sm">
+                                                {new Date(shiftData.firstStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </span>
+                                        </div>
+                                        <button 
+                                            className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-bold text-slate-300 transition-colors"
+                                            onClick={() => {
+                                                const d = new Date(shiftData.firstStartTime!);
+                                                setManualClockTime(`${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`);
+                                                setManualClockType('pick_start');
+                                                haptic('light');
+                                                setShowClockInModal(true);
+                                            }}
+                                        >
+                                            Edit
+                                        </button>
+                                    </div>
+                                )}
                                 <div className="grid grid-cols-4 gap-2">
                                     {[
                                         { id: 1, val: lane1, set: setLane1 },
