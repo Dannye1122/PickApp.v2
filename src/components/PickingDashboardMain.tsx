@@ -604,13 +604,18 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
                             </div>
 
                             <div className={`${theme.panel} ${theme.radius} border border-slate-800 overflow-hidden relative shadow-xl`}>
+                                <div className="text-[9px] text-slate-500 px-3 py-1 bg-slate-950/60 border-b border-slate-800/60 flex items-center justify-between">
+                                    <span>Swipe horizontally to view all columns</span>
+                                    <span className="text-[8px] text-sky-400 font-bold uppercase tracking-widest">Scroll &rarr;</span>
+                                </div>
                                 <div 
-                                    className="max-h-[320px] sm:max-h-[400px] overflow-y-auto overflow-x-auto no-scrollbar"
+                                    className="max-h-[320px] sm:max-h-[400px] overflow-y-auto overflow-x-auto"
+                                    style={{ touchAction: 'pan-x pan-y' }}
                                     onTouchStart={(e) => e.stopPropagation()}
                                     onTouchMove={(e) => e.stopPropagation()}
                                     onTouchEnd={(e) => e.stopPropagation()}
                                 >
-                                    <table className="w-full text-[10px] sm:text-xs">
+                                    <table className="w-full text-[10px] sm:text-xs min-w-[520px]">
                                         <thead>
                                             <tr className="sticky top-0 bg-slate-900 text-slate-400 border-b border-slate-800 z-10 text-[9px] sm:text-[10px] uppercase font-black tracking-wider">
                                                 <th className="py-2.5 px-2 sm:px-3.5 text-left whitespace-nowrap text-slate-500">Start</th>
