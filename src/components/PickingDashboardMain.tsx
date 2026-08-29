@@ -609,11 +609,17 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
                                     <span className="text-[8px] text-sky-400 font-bold uppercase tracking-widest">Scroll &rarr;</span>
                                 </div>
                                 <div 
-                                    className="max-h-[320px] sm:max-h-[400px] overflow-y-auto overflow-x-auto"
-                                    style={{ touchAction: 'pan-x pan-y' }}
-                                    onTouchStart={(e) => e.stopPropagation()}
-                                    onTouchMove={(e) => e.stopPropagation()}
-                                    onTouchEnd={(e) => e.stopPropagation()}
+                                    className="max-h-[320px] sm:max-h-[400px] overflow-y-auto overflow-x-auto overscroll-x-contain touch-pan-x"
+                                    style={{ touchAction: 'pan-x' }}
+                                    onTouchStart={(e) => {
+                                        e.stopPropagation();
+                                    }}
+                                    onTouchMove={(e) => {
+                                        e.stopPropagation();
+                                    }}
+                                    onTouchEnd={(e) => {
+                                        e.stopPropagation();
+                                    }}
                                 >
                                     <table className="w-full text-[10px] sm:text-xs min-w-[520px]">
                                         <thead>

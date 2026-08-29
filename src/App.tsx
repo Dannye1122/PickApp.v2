@@ -2292,9 +2292,9 @@ export default function App() {
         const cases = parseInt(caseCount);
         if (!cases || isNaN(cases) || !pickStartTime) return;
 
-        const fixedExemptSeconds = 15 * 60; // 5 + 10 = 15m
-        const actualBreakSeconds = shiftData.totalBreakSeconds || 0;
-        const rawElapsed = (now.getTime() - pickStartTime) / 1000 - (fixedExemptSeconds + actualBreakSeconds);
+        const currentBreak = (isOnBreak && breakStartTime) ? (now.getTime() - breakStartTime) / 1000 : 0;
+        const totalCurrentBreaks = (breakTimeDuringCurrentPick || 0) + currentBreak;
+        const rawElapsed = (now.getTime() - pickStartTime - (totalCurrentBreaks * 1000)) / 1000;
         const elapsedSeconds = Math.max(1, isNaN(rawElapsed) ? 1 : rawElapsed);
         const finalRate = Math.round((cases / elapsedSeconds) * 3600);
 
