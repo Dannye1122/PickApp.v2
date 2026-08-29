@@ -56,7 +56,7 @@ import { formatTime, formatHHMM, formatHHMMSS, hoursToHHMM } from './utils/forma
 import { CapCamera, CameraResultType, CameraSource, Preferences } from './lib/capacitorMocks';
 import { triggerWebCamera } from './utils/webCamera';
 import { getDeptName, resolveDepartmentInfo } from './utils/deptUtils';
-import { getDepartmentBreakdown } from './utils/statsUtils';
+import { getDepartmentBreakdown, isBreakEntry, isNoteEntry, isPickEntry } from './utils/statsUtils';
 
 // New Modular Architecture
 import { OnboardingModal } from './components/OnboardingModal';
@@ -2396,7 +2396,7 @@ export default function App() {
             newAchievements.push('millennium');
             triggerSurprise('MILLENNIUM CLUB!');
         }
-        if (shiftData.history.filter((h: any) => h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote).length === 0 && !newAchievements.includes('early_bird')) {
+        if (shiftData.history.filter((h: any) => isPickEntry(h)).length === 0 && !newAchievements.includes('early_bird')) {
             newAchievements.push('early_bird');
         }
         
@@ -2657,7 +2657,7 @@ export default function App() {
     };
 
     const syncToFirstPick = () => {
-        const actualPicks = shiftData.history.filter((h: any) => h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote);
+        const actualPicks = shiftData.history.filter((h: any) => isPickEntry(h));
         if (actualPicks.length === 0) {
             haptic('heavy');
             alert("Record at least one order first!");
@@ -2674,7 +2674,7 @@ export default function App() {
 
         haptic('medium');
         setShiftData((prev: any) => {
-            const indexOfOldestPick = prev.history.map((h: any) => h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote).lastIndexOf(true);
+            const indexOfOldestPick = prev.history.map((h: any) => isPickEntry(h)).lastIndexOf(true);
             return {
                 ...prev,
                 firstStartTime: oldest.timestamp,

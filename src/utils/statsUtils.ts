@@ -1,6 +1,30 @@
 import { DEPARTMENTS } from '../constants/data';
 import { resolveDepartmentInfo } from './deptUtils';
 
+export const isBreakEntry = (h: any): boolean => {
+    if (!h) return false;
+    if (h.isBreak === true || h.type === 'BREAK') return true;
+    if (typeof h.gap === 'string') {
+        const upper = h.gap.trim().toUpperCase();
+        return upper === 'BREAK' || upper.includes('BREAK') || upper.includes('DINNER');
+    }
+    return false;
+};
+
+export const isNoteEntry = (h: any): boolean => {
+    if (!h) return false;
+    if (h.isNote === true || h.type === 'NOTE') return true;
+    if (typeof h.gap === 'string') {
+        const upper = h.gap.trim().toUpperCase();
+        return upper === 'NOTE' || upper.includes('NOTE');
+    }
+    return false;
+};
+
+export const isPickEntry = (h: any): boolean => {
+    return !isBreakEntry(h) && !isNoteEntry(h);
+};
+
 export const getDepartmentBreakdown = (history: any[], summaryInfo?: any) => {
     if (!history || history.length === 0) return [];
     
@@ -16,7 +40,7 @@ export const getDepartmentBreakdown = (history: any[], summaryInfo?: any) => {
     }> = {};
     
     history.forEach((h: any) => {
-        if (h.gap === 'BREAK' || h.gap === 'NOTE' || h.isNote) return;
+        if (!isPickEntry(h)) return;
         
         const deptInfo = resolveDepartmentInfo(h.department, h.departmentName);
         const deptKey = deptInfo.key;

@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { ShiftData, WarehouseSettings } from '../types';
 import { calculateAislesExemptionDetail } from '../lib/exemptionUtils';
 import { DEPARTMENTS } from '../constants/data';
+import { isBreakEntry, isNoteEntry, isPickEntry } from '../utils/statsUtils';
 
 const parseFormattedTimeToSeconds = (str: string): number => {
     if (!str || typeof str !== 'string') return 0;
@@ -56,12 +57,29 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
                 currentBreak = Math.max(0, (nowTime - breakStart) / 1000);
             }
         }
+        
+        // Sum historical break durations from history to ensure breaks are never missed
+        let historicalBreaksSec = 0;
+        if (shiftData.history) {
+            shiftData.history.forEach((h: any) => {
+                if (isBreakEntry(h)) {
+                    let dur = h.durationSeconds;
+                    if (dur === undefined || isNaN(dur)) {
+                        dur = parseFormattedTimeToSeconds(h.saved);
+                    }
+                    if (dur && !isNaN(dur)) {
+                        historicalBreaksSec += dur;
+                    }
+                }
+            });
+        }
+
         const totalExcluded = (typeof shiftData.totalExcludedTime === 'number' && !isNaN(shiftData.totalExcludedTime)) ? shiftData.totalExcludedTime : 0;
-        const totalBreaks = totalExcluded + currentBreak;
+        const totalBreaks = Math.max(totalExcluded, historicalBreaksSec) + currentBreak;
 
         const spans: { dept: string, start: number, end: number }[] = [];
         const chronologicalHistory = [...(shiftData.history || [])]
-            .filter(h => h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote)
+            .filter(h => isPickEntry(h))
             .reverse();
         
         let currentSpan: { dept: string, start: number, end: number } | null = null;
@@ -162,14 +180,12 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         const deptCases: Record<string, number> = {};
         if (shiftData.history) {
             shiftData.history.forEach((h: any) => {
-                if (h.gap === 'BREAK' || h.gap === 'NOTE' || h.isNote) return;
+                if (!isPickEntry(h)) return;
                 const dept = h.department || 'aisles';
                 const cases = parseInt(h.cases) || 0;
                 deptCases[dept] = (deptCases[dept] || 0) + cases;
             });
         }
-        // Note: active in-progress order cases are NOT added to finished deptCases until the order is completed,
-        // preventing artificial pick rate spikes when starting a new order.
 
         // 3. Subtract breaks for each department
         const deptBreaks: Record<string, number> = {};
@@ -184,7 +200,7 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         // Handle historical breaks
         if (shiftData.history) {
             shiftData.history.forEach((h: any) => {
-                if (h.gap !== 'BREAK') return;
+                if (!isBreakEntry(h)) return;
                 
                 let breakDept = h.department;
                 
@@ -197,15 +213,15 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
                 }
                 
                 if (!breakDept) {
-                    breakDept = 'aisles';
+                    breakDept = shiftData.department || 'aisles';
                 }
 
                 let duration = h.durationSeconds;
-                if (duration === undefined) {
+                if (duration === undefined || isNaN(duration)) {
                     duration = parseFormattedTimeToSeconds(h.saved);
                 }
                 
-                deptBreaks[breakDept] = (deptBreaks[breakDept] || 0) + duration;
+                deptBreaks[breakDept] = (deptBreaks[breakDept] || 0) + (duration || 0);
             });
         }
 
@@ -213,7 +229,7 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         const workedDepts = new Set<string>();
         if (shiftData.history) {
             shiftData.history.forEach((h: any) => {
-                if (h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote) workedDepts.add(h.department || 'aisles');
+                if (isPickEntry(h)) workedDepts.add(h.department || 'aisles');
             });
         }
         workedDepts.add(shiftData.department || 'aisles');
@@ -261,7 +277,7 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         let countedCases = 0;
         
         shiftData.history.forEach((h: any) => {
-            if (h.gap === 'BREAK' || h.gap === 'NOTE' || h.isNote) return;
+            if (!isPickEntry(h)) return;
             const cases = parseInt(h.cases) || 0;
             const tRate = h.targetRate || targetRate; // fallback to current target
             totalTargetSec += (cases / tRate) * 3600;
@@ -297,7 +313,7 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
 
     const { consistencyPercent, shiftBestRate } = useMemo(() => {
         const historyRates = shiftData.history
-            .filter(h => typeof h.rate === 'number' && h.rate > 0)
+            .filter(h => isPickEntry(h) && typeof h.rate === 'number' && h.rate > 0)
             .map(h => h.rate as number);
             
         if (historyRates.length === 0) return { consistencyPercent: 0, shiftBestRate: 0 };
@@ -317,7 +333,7 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
 
     const trendData = useMemo(() => {
         return shiftData.history
-            .filter((h: any) => h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote)
+            .filter((h: any) => isPickEntry(h))
             .slice(-10)
             .map((entry: any, index: number) => ({
                 name: entry.finish || `O${index + 1}`,

@@ -7,6 +7,7 @@ import { PickingDashboard } from './PickingDashboard';
 import { MetricCard } from './stats/MetricCard';
 import { ShiftData, ThemeColors } from '../types';
 import { DEPT_LANES } from '../constants/data';
+import { isBreakEntry, isNoteEntry, isPickEntry } from '../utils/statsUtils';
 
 export interface PickingDashboardMainProps {
     shiftData: ShiftData;
@@ -573,7 +574,7 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
                             <div className="flex justify-between items-end mb-4 px-1">
                                 <h3 className={`text-sm font-bold text-white tracking-tight flex items-center gap-2 ${theme.font}`}>
                                     Pick History
-                                    <span className={`text-[10px] font-black text-slate-500 uppercase tracking-widest bg-slate-900 px-2 py-0.5 ${theme.radius} border border-slate-800`}>{shiftData.history.filter((h: any) => h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote).length} RECORDS</span>
+                                    <span className={`text-[10px] font-black text-slate-500 uppercase tracking-widest bg-slate-900 px-2 py-0.5 ${theme.radius} border border-slate-800`}>{shiftData.history.filter((h: any) => isPickEntry(h)).length} RECORDS</span>
                                 </h3>
                             </div>
 
@@ -606,7 +607,7 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
                             <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
                                 {shiftData.history.map((entry: any, i: number) => {
                                     const isBest = entry.rate === shiftBestRate && typeof entry.rate === 'number';
-                                    const isNote = entry.gap === 'NOTE' || entry.isNote;
+                                    const isNote = isNoteEntry(entry);
                                     if (isNote) {
                                         return (
                                             <div key={i} className={`${theme.panel} p-3 rounded-xl border border-amber-500/30 bg-amber-500/5`}>
@@ -620,6 +621,26 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
                                                         LOGGED IN: {entry.departmentName}
                                                     </div>
                                                 )}
+                                            </div>
+                                        );
+                                    }
+                                    const isBreak = isBreakEntry(entry);
+                                    if (isBreak) {
+                                        const breakTitle = entry.gap?.toUpperCase().includes('DINNER') ? 'Dinner Break' : 'Break';
+                                        return (
+                                            <div key={i} className={`${theme.panel} p-3 rounded-xl border border-amber-500/20 bg-amber-500/5`}>
+                                                <div className="flex items-center justify-between text-xs mb-1">
+                                                    <div className="flex items-center gap-2 font-bold text-amber-400">
+                                                        <Coffee size={14} className="shrink-0" />
+                                                        <span>{breakTitle}</span>
+                                                        <span className="text-[10px] text-slate-400 font-mono bg-slate-900/80 px-1.5 py-0.5 rounded border border-slate-800">
+                                                            {entry.start} &rarr; {entry.finish || '--:--'}
+                                                        </span>
+                                                    </div>
+                                                    <span className="text-[9px] uppercase tracking-wider bg-amber-500/20 text-amber-300 font-black px-2 py-0.5 rounded">
+                                                        {entry.breakTime || entry.saved || 'BREAK'}
+                                                    </span>
+                                                </div>
                                             </div>
                                         );
                                     }

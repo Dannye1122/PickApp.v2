@@ -4,6 +4,7 @@ import { setCachedData, getCachedData } from '../utils/quotaManager';
 import { syncManager } from './syncManager';
 import { shiftCacheService } from './shiftCacheService';
 import { normalizeDateKey } from '../utils/dateUtils';
+import { isBreakEntry, isNoteEntry, isPickEntry } from '../utils/statsUtils';
 
 /**
  * Interface for a complete Shift Summary object
@@ -88,7 +89,7 @@ export function generateFullShiftReport(shift: any): string {
   
   // Calculate Peak Rate
   const pickRates = history
-    .filter((h: any) => h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote && typeof h.rate === 'number' && h.rate > 0)
+    .filter((h: any) => isPickEntry(h) && typeof h.rate === 'number' && h.rate > 0)
     .map((h: any) => h.rate);
   const peakRate = shift.peakRate || (pickRates.length > 0 ? Math.max(...pickRates) : appRate);
   
@@ -123,12 +124,12 @@ export function generateFullShiftReport(shift: any): string {
   csv += `Type,Start Time,Finish Time,Gap,Cases,Rate,Performance,Store Label,Department\n`;
 
   history.forEach((h: any) => {
-    const isBreak = h.gap === 'BREAK' || h.type === 'BREAK';
-    const isNote = h.gap === 'NOTE' || h.isNote || h.type === 'NOTE';
+    const isBreak = isBreakEntry(h);
+    const isNote = isNoteEntry(h);
     const type = isBreak ? 'BREAK' : (isNote ? 'NOTE' : 'PICK');
     const start = h.start || '--:--';
     const finish = h.finish || '--:--';
-    const gap = isBreak ? 'BREAK' : (isNote ? '-' : (h.gap || '-'));
+    const gap = isBreak ? (h.gap?.toUpperCase().includes('DINNER') ? 'DINNER BREAK' : 'BREAK') : (isNote ? '-' : (h.gap || '-'));
     const cases = (isBreak || isNote || h.cases === 0 || h.cases === '-') ? '-' : h.cases;
     const rateVal = (isBreak || isNote || h.rate === 0 || h.rate === '-') ? '-' : h.rate;
     const perf = isBreak ? (h.breakTime || h.saved || '-') : (isNote ? (h.storeLabel || '-') : (h.saved || h.performance || '-'));

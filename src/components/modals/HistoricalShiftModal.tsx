@@ -1,7 +1,7 @@
 import React from 'react';
 import { Sparkles, Clock, LogOut, Activity, Coffee, Edit2, Check, X, Camera, Trash2, Share2 } from 'lucide-react';
 import { formatHHMM, formatTime } from '../../utils/formatUtils';
-import { getDepartmentBreakdown } from '../../utils/statsUtils';
+import { getDepartmentBreakdown, isBreakEntry, isNoteEntry, isPickEntry } from '../../utils/statsUtils';
 import { haptic } from '../../services/hapticService';
 import { deleteShiftSummary, fetchShiftSummaries, saveShiftSummary } from '../../services/leaderboardService';
 import { copyFullShiftReport } from '../../services/shiftReportService';
@@ -87,7 +87,7 @@ export const HistoricalShiftModal: React.FC<HistoricalShiftModalProps> = ({
                         if (derivedActiveSecs <= 60 && hist.length > 0) {
                             let sumElapsed = 0;
                             hist.forEach((h: any) => {
-                                if (h.gap === 'BREAK' || h.gap === 'NOTE' || h.isNote) return;
+                                if (!isPickEntry(h)) return;
                                 const c = parseInt(h.cases) || 0;
                                 let el = h.elapsedSeconds;
                                 if (el === undefined || isNaN(el) || el <= 0) {
@@ -273,7 +273,7 @@ export const HistoricalShiftModal: React.FC<HistoricalShiftModalProps> = ({
                         <div>
                             <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 flex justify-between items-end gap-2">
                                 Order Details
-                                <span className="bg-slate-800 text-[8px] px-2 py-0.5 rounded text-slate-300 shrink-0">{viewingPastSummary.history.filter((h: any) => h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote).length} PICKS</span>
+                                <span className="bg-slate-800 text-[8px] px-2 py-0.5 rounded text-slate-300 shrink-0">{viewingPastSummary.history.filter((h: any) => isPickEntry(h)).length} PICKS</span>
                             </h4>
                             <div className="bg-slate-950/40 rounded-2xl border border-slate-800 overflow-hidden">
                                 <table className="w-full text-[10px] sm:text-xs">
@@ -287,7 +287,7 @@ export const HistoricalShiftModal: React.FC<HistoricalShiftModalProps> = ({
                                     </thead>
                                     <tbody className="divide-y divide-slate-800/50">
                                         {viewingPastSummary.history.map((h: any, idx: number) => {
-                                            const isNote = h.gap === 'NOTE' || h.isNote;
+                                            const isNote = isNoteEntry(h);
                                             if (isNote) {
                                                 return (
                                                     <tr key={idx} className="bg-amber-500/5 hover:bg-amber-500/10 border-l-2 border-l-amber-500 transition-colors">
@@ -310,9 +310,10 @@ export const HistoricalShiftModal: React.FC<HistoricalShiftModalProps> = ({
                                                     </tr>
                                                 );
                                             }
+                                            const isBreak = isBreakEntry(h);
                                             const isEditingThisOrder = editingOrderIndex === idx;
                                             const orderLabelToDisplay = (() => {
-                                                if (h.gap === 'BREAK') return 'BREAK';
+                                                if (isBreak) return h.gap?.toUpperCase().includes('DINNER') ? 'DINNER BREAK' : 'BREAK';
                                                 const rawLabel = (h.storeLabel || '').trim();
                                                 if (rawLabel && rawLabel !== '-') return rawLabel;
                                                 if (h.departmentName || h.department) return h.departmentName || h.department;
@@ -320,11 +321,11 @@ export const HistoricalShiftModal: React.FC<HistoricalShiftModalProps> = ({
                                             })();
 
                                             return (
-                                                <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
+                                                <tr key={idx} className={`hover:bg-slate-800/30 transition-colors ${isBreak ? 'bg-amber-500/5' : ''}`}>
                                                     <td className="py-2.5 px-3 text-slate-400 whitespace-nowrap font-mono tracking-tighter">
                                                         {h.start} <span className="text-slate-600 font-sans mx-0.5">→</span> {h.finish}
                                                     </td>
-                                                    <td className="py-2.5 px-2 text-sky-400 font-bold max-w-[200px]">
+                                                    <td className={`py-2.5 px-2 ${isBreak ? 'text-amber-400' : 'text-sky-400'} font-bold max-w-[200px]`}>
                                                         <div className="flex flex-col">
                                                             <div className="flex items-center gap-1.5 flex-wrap">
                                                                 {isEditingThisOrder ? (
@@ -361,7 +362,7 @@ export const HistoricalShiftModal: React.FC<HistoricalShiftModalProps> = ({
                                                                         <span className="truncate max-w-[140px] sm:max-w-[180px]" title={orderLabelToDisplay}>
                                                                             {orderLabelToDisplay}
                                                                         </span>
-                                                                        {h.gap !== 'BREAK' && (
+                                                                        {!isBreak && (
                                                                             <button
                                                                                 onClick={(e) => {
                                                                                     e.stopPropagation();
@@ -385,14 +386,14 @@ export const HistoricalShiftModal: React.FC<HistoricalShiftModalProps> = ({
                                                                     </button>
                                                                 )}
                                                             </div>
-                                                            {h.gap !== 'BREAK' && h.gap !== 'NOTE' && !h.isNote && orderLabelToDisplay !== (h.departmentName || h.department || 'Aisles') && (
+                                                            {!isBreak && !isNote && orderLabelToDisplay !== (h.departmentName || h.department || 'Aisles') && (
                                                                 <span className="text-[8px] text-slate-500 font-bold tracking-wider uppercase block mt-0.5">
                                                                     {h.departmentName || h.department || 'Aisles'}
                                                                 </span>
                                                             )}
                                                         </div>
                                                     </td>
-                                                    <td className="py-2.5 px-2 text-center text-white font-medium">{h.cases}</td>
+                                                    <td className="py-2.5 px-2 text-center text-white font-medium">{isBreak ? '-' : h.cases}</td>
                                                     <td className={`py-2.5 px-3 text-right font-black w-[50px] ${h.rate && h.rate > 0 ? (h.statusClass?.includes('emerald') ? 'text-emerald-400' : 'text-slate-300') : 'text-slate-500'}`}>
                                                         {h.rate || '-'}
                                                     </td>

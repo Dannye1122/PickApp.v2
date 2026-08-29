@@ -5,6 +5,7 @@ import {
 import { ShiftSummary, ThemeColors, UserProfile } from '../../types';
 import { getLocalDateString, normalizeDateStr, saveUserProfile, deleteShiftSummary } from '../../services/leaderboardService';
 import { formatHHMM, hoursToHHMM } from '../../utils/formatUtils';
+import { isPickEntry } from '../../utils/statsUtils';
 import { auth } from '../../lib/firebase';
 
 const safeLocalStorage = {
@@ -562,7 +563,7 @@ export const RotaModal: React.FC<RotaModalProps> = ({
                         {(() => {
                           const depMap: any = {};
                           (summary.history || []).forEach((h: any) => {
-                            if (h.gap === 'BREAK') return;
+                            if (!isPickEntry(h)) return;
                             const dId = h.departmentName || h.department || 'Aisles';
                             if (!depMap[dId]) {
                               depMap[dId] = { cases: 0, seconds: 0 };
