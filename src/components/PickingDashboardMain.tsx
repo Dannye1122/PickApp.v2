@@ -603,114 +603,79 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
                                 </div>
                             </div>
 
-                            <div className={`${theme.panel} ${theme.radius} border border-slate-800 overflow-hidden relative shadow-xl`}>
-                                <div className="text-[9px] text-slate-500 px-3 py-1 bg-slate-950/60 border-b border-slate-800/60 flex items-center justify-between">
-                                    <span>Swipe horizontally to view all columns</span>
-                                    <span className="text-[8px] text-sky-400 font-bold uppercase tracking-widest">Scroll &rarr;</span>
-                                </div>
-                                <div 
-                                    className="max-h-[320px] sm:max-h-[400px] overflow-y-auto overflow-x-auto overscroll-x-contain touch-pan-x"
-                                    style={{ touchAction: 'pan-x' }}
-                                    onTouchStart={(e) => {
-                                        e.stopPropagation();
-                                    }}
-                                    onTouchMove={(e) => {
-                                        e.stopPropagation();
-                                    }}
-                                    onTouchEnd={(e) => {
-                                        e.stopPropagation();
-                                    }}
-                                >
-                                    <table className="w-full text-[10px] sm:text-xs min-w-[520px]">
-                                        <thead>
-                                            <tr className="sticky top-0 bg-slate-900 text-slate-400 border-b border-slate-800 z-10 text-[9px] sm:text-[10px] uppercase font-black tracking-wider">
-                                                <th className="py-2.5 px-2 sm:px-3.5 text-left whitespace-nowrap text-slate-500">Start</th>
-                                                <th className="py-2.5 px-2 sm:px-3.5 text-left whitespace-nowrap text-slate-500">Label</th>
-                                                <th className="py-2.5 px-2 sm:px-3.5 text-left whitespace-nowrap text-slate-500">Finish</th>
-                                                <th className="py-2.5 px-2 sm:px-3.5 text-center whitespace-nowrap text-slate-500">Gap</th>
-                                                <th className="py-2.5 px-2 sm:px-3.5 text-center whitespace-nowrap text-slate-500">Cases</th>
-                                                <th className="py-2.5 px-2 sm:px-3.5 text-center whitespace-nowrap text-slate-500">Rate</th>
-                                                <th className="py-2.5 px-2 sm:px-3.5 text-right whitespace-nowrap text-slate-500">Saved</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-800/40">
-                                            {shiftData.history.map((entry: any, i: number) => {
-                                                const isBest = entry.rate === shiftBestRate && typeof entry.rate === 'number';
-                                                const isNote = entry.gap === 'NOTE' || entry.isNote;
-                                                if (isNote) {
-                                                    return (
-                                                        <tr key={i} className="group bg-amber-500/5 hover:bg-amber-500/10 border-l-2 border-l-amber-500 transition-colors">
-                                                            <td className="py-2.5 px-1.5 sm:px-3 text-amber-400 font-extrabold whitespace-nowrap flex items-center gap-1.5">
-                                                                <FileText size={11} className="shrink-0" />
-                                                                {entry.start}
-                                                            </td>
-                                                            <td colSpan={5} className="py-2.5 px-1.5 sm:px-3 text-amber-300 font-bold max-w-xl break-words">
-                                                                <div className="flex flex-col">
-                                                                    <span className="whitespace-normal leading-relaxed text-[11px] sm:text-xs font-black select-text tracking-wide">{entry.storeLabel}</span>
-                                                                    {entry.departmentName && (
-                                                                        <span className="text-[8px] text-amber-500/60 font-black tracking-wider uppercase block mt-1">
-                                                                            LOGGED IN: {entry.departmentName}
-                                                                        </span>
-                                                                    )}
-                                                                </div>
-                                                            </td>
-                                                            <td className="py-2.5 px-1.5 sm:px-3 text-right text-amber-500/70 font-black text-[9px] uppercase tracking-wider whitespace-nowrap">
-                                                                NOTE
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                }
-                                                return (
-                                                    <tr key={i} className={`group hover:bg-slate-800/25 transition-colors ${isBest ? 'bg-amber-400/5' : ''}`}>
-                                                         <td className="py-2 px-1.5 sm:px-3 text-sky-400 font-extrabold whitespace-nowrap flex items-center gap-1.5">
-                                                            {isBest && <Zap size={10} className="text-amber-400 shrink-0" />}
-                                                            {entry.start}
-                                                        </td>
-                                                        <td className="py-2 px-1.5 sm:px-3 text-sky-400 font-bold whitespace-nowrap">
-                                                            <div className="flex flex-col">
-                                                                <div className="flex items-center gap-1.5">
-                                                                    <span className="truncate max-w-[150px] sm:max-w-[220px]" title={entry.storeLabel || entry.departmentName || `Order #${i + 1}`}>
-                                                                        {entry.storeLabel || entry.departmentName || `Order #${i + 1}`}
-                                                                    </span>
-                                                                    {(entry.labelImage || (entry.labelImages && entry.labelImages.length > 0)) && (
-                                                                        <button 
-                                                                            onClick={(e) => { 
-                                                                                e.stopPropagation(); 
-                                                                                const allI = [
-                                                                                    ...(entry.labelImages || []), 
-                                                                                    ...(entry.labelImage ? [entry.labelImage] : [])
-                                                                                ].filter(Boolean);
-                                                                                setViewingLabels(allI.length ? allI : null); 
-                                                                            }} 
-                                                                            className="text-emerald-400 p-0.5 hover:bg-emerald-500/10 rounded shrink-0 border border-emerald-500/20"
-                                                                        >
-                                                                            <Camera size={11} />
-                                                                        </button>
-                                                                    )}
-                                                                </div>
-                                                                {entry.gap !== 'BREAK' && entry.gap !== 'NOTE' && !entry.isNote && (
-                                                                    <span className="text-[8px] text-slate-500 font-black tracking-wider uppercase block mt-0.5">
-                                                                        {entry.departmentName || entry.department || 'Aisles'}
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                        </td>
-                                                        <td className="py-2 px-1.5 sm:px-3 text-slate-400 whitespace-nowrap">{entry.finish || '--:--'}</td>
-                                                        <td className="py-2 px-1.5 sm:px-3 text-center text-slate-400 font-mono whitespace-nowrap">{entry.gap}</td>
-                                                        <td className="py-2 px-1.5 sm:px-3 text-center font-medium whitespace-nowrap">
-                                                            <div className="flex flex-col items-center">
-                                                                <span className={entry.isCaseCountModified ? 'text-fuchsia-400 font-bold' : 'text-white'}>{entry.cases}</span>
-                                                                {entry.isCaseCountModified && <span className="text-[7px] bg-fuchsia-500/20 text-fuchsia-300 px-1 rounded border border-fuchsia-500/20 mt-0.5">MODIFIED</span>}
-                                                            </div>
-                                                        </td>
-                                                        <td className={`py-2 px-1.5 sm:px-3 text-center font-black whitespace-nowrap ${isBest ? 'text-amber-400' : 'text-white'}`}>{entry.rate}</td>
-                                                        <td className={`py-2 px-1.5 sm:px-3 text-right font-black text-[10px] sm:text-xs whitespace-nowrap ${entry.statusClass}`}>{entry.saved}</td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
+                            <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
+                                {shiftData.history.map((entry: any, i: number) => {
+                                    const isBest = entry.rate === shiftBestRate && typeof entry.rate === 'number';
+                                    const isNote = entry.gap === 'NOTE' || entry.isNote;
+                                    if (isNote) {
+                                        return (
+                                            <div key={i} className={`${theme.panel} p-3 rounded-xl border border-amber-500/30 bg-amber-500/5`}>
+                                                <div className="flex items-center justify-between text-xs text-amber-400 font-bold mb-1">
+                                                    <span className="flex items-center gap-1.5"><FileText size={13} /> Note at {entry.start}</span>
+                                                    <span className="text-[9px] uppercase tracking-wider bg-amber-500/20 px-2 py-0.5 rounded">Note</span>
+                                                </div>
+                                                <div className="text-xs text-amber-200 font-medium">{entry.storeLabel}</div>
+                                                {entry.departmentName && (
+                                                    <div className="text-[8px] text-amber-500/60 font-black tracking-wider uppercase mt-1">
+                                                        LOGGED IN: {entry.departmentName}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    }
+                                    return (
+                                        <div key={i} className={`${theme.panel} p-3 rounded-xl border border-slate-800 hover:border-slate-700 transition-all ${isBest ? 'bg-amber-500/5 border-amber-500/30 shadow-lg shadow-amber-500/5' : ''}`}>
+                                            {/* Header row: Start -> Finish & Saved */}
+                                            <div className="flex items-center justify-between text-xs mb-1.5">
+                                                <div className="flex items-center gap-2 font-black text-sky-400">
+                                                    {isBest && <Zap size={12} className="text-amber-400 shrink-0" />}
+                                                    <span>{entry.start} &rarr; {entry.finish || '--:--'}</span>
+                                                    <span className="text-[10px] text-slate-400 font-mono bg-slate-900/80 px-1.5 py-0.5 rounded border border-slate-800">Gap: {entry.gap}</span>
+                                                </div>
+                                                <div className={`font-black text-xs ${entry.statusClass || 'text-emerald-400'}`}>
+                                                    {entry.saved}
+                                                </div>
+                                            </div>
+
+                                            {/* Store label */}
+                                            <div className="text-xs font-bold text-slate-200 mb-2.5 flex items-center justify-between gap-2">
+                                                <span className="truncate" title={entry.storeLabel || entry.departmentName || `Order #${i + 1}`}>
+                                                    {entry.storeLabel || entry.departmentName || `Order #${i + 1}`}
+                                                </span>
+                                                {(entry.labelImage || (entry.labelImages && entry.labelImages.length > 0)) && (
+                                                    <button 
+                                                        onClick={(e) => { 
+                                                            e.stopPropagation(); 
+                                                            const allI = [
+                                                                ...(entry.labelImages || []), 
+                                                                ...(entry.labelImage ? [entry.labelImage] : [])
+                                                            ].filter(Boolean);
+                                                            setViewingLabels(allI.length ? allI : null); 
+                                                        }} 
+                                                        className="text-emerald-400 px-2 py-0.5 hover:bg-emerald-500/10 rounded flex items-center gap-1 text-[10px] font-bold border border-emerald-500/20 shrink-0"
+                                                    >
+                                                        <Camera size={12} /> Label
+                                                    </button>
+                                                )}
+                                            </div>
+
+                                            {/* Metrics bottom pill row */}
+                                            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/60 text-[11px]">
+                                                <div className="flex items-center justify-between bg-slate-900/60 px-2.5 py-1.5 rounded-lg border border-slate-800/40">
+                                                    <span className="text-slate-500 uppercase text-[9px] font-black">Cases</span>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className={`font-black ${entry.isCaseCountModified ? 'text-fuchsia-400' : 'text-white'}`}>{entry.cases}</span>
+                                                        {entry.isCaseCountModified && <span className="text-[7px] bg-fuchsia-500/20 text-fuchsia-300 px-1 rounded border border-fuchsia-500/20">MOD</span>}
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center justify-between bg-slate-900/60 px-2.5 py-1.5 rounded-lg border border-slate-800/40">
+                                                    <span className="text-slate-500 uppercase text-[9px] font-black">Rate</span>
+                                                    <span className={`font-black ${isBest ? 'text-amber-400' : 'text-white'}`}>{entry.rate} <span className="text-[9px] font-normal text-slate-500">P/H</span></span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
                             </div>
 
                             {/* Move buttons back here, just after table */}
