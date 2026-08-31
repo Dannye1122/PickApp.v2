@@ -255,8 +255,9 @@ class SyncManager {
         
         try {
             if (type === 'liveStatus') {
-                const { user, rate, department, totalCases, activeSeconds, steps, xp, status, targetRate, docId, currentOrder, customStatus, listeningTo } = payload;
+                const { user, rate, department, totalCases, activeSeconds, steps, xp, status, targetRate, docId, currentOrder, customStatus, listeningTo, date } = payload;
                 const liveRef = doc(db, 'leaderboard', docId);
+                const todayStr = date || new Date().toISOString().split('T')[0];
                 await setDoc(liveRef, {
                     name: user.toUpperCase(),
                     rate,
@@ -272,6 +273,7 @@ class SyncManager {
                     listeningTo: listeningTo || '',
                     warehouseId,
                     type: 'live',
+                    date: todayStr,
                     lastUpdate: serverTimestamp()
                 }, { merge: true });
             } 

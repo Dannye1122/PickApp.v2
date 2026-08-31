@@ -297,9 +297,9 @@ export const clearLeaderboard = async () => {
 export const updateLiveStatus = async (user: string, rate: number, department: string, isActive: boolean, stats?: { totalCases: number, activeSeconds: number, steps?: number, xp?: number, status?: 'picking' | 'idle' | 'break' | 'finished', targetRate?: number, currentOrder?: string, customStatus?: string, listeningTo?: string }) => {
   try {
     if (!user) return;
-    // if (user.toUpperCase().trim() === 'ADMIN') return;
     const uid = auth.currentUser?.uid || 'local';
     const docId = `${user.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}_${uid.slice(0, 6)}`;
+    const todayStr = getLocalDateString(new Date());
     
     if (!isActive || stats?.status === 'finished') {
       try {
@@ -327,6 +327,7 @@ export const updateLiveStatus = async (user: string, rate: number, department: s
         customStatus: stats?.customStatus || '',
         listeningTo: stats?.listeningTo || '',
         warehouseId: currentWarehouseId,
+        date: todayStr,
         lastUpdate: serverTimestamp() // Explicitly set lastUpdate
       });
     }
