@@ -141,49 +141,79 @@ export const fetchLeaderboard = async (
   }
 
   const leaderboardRef = collection(db, 'leaderboard');
-    const now = new Date();
-    const localToday = getLocalDateString(now);
-    const localYesterday = getLocalDateString(new Date(now.getTime() - 86400000));
-    const utcToday = now.toISOString().split('T')[0];
-    const utcYesterday = new Date(now.getTime() - 86400000).toISOString().split('T')[0];
-    
-    const targetDates = Array.from(new Set([localToday, localYesterday, utcToday, utcYesterday]));
+  const now = new Date();
+  const localToday = getLocalDateString(now);
+  const localYesterday = getLocalDateString(new Date(now.getTime() - 86400000));
+  const utcToday = now.toISOString().split('T')[0];
+  const utcYesterday = new Date(now.getTime() - 86400000).toISOString().split('T')[0];
+  
+  const targetDates = Array.from(new Set([localToday, localYesterday, utcToday, utcYesterday]));
 
+  try {
+    // 1. Fetch recent live leaderboard entries
     const q = query(
       leaderboardRef, 
       where('date', 'in', targetDates)
     );
+    const snapshot = await getDocs(q);
+    let entries = snapshot.docs.map(doc => doc.data() as LeaderboardEntry);
+    
+    // Also fetch all entries if today/yesterday query returned very few
+    if (entries.length === 0) {
+      const fallbackSnap = await getDocs(query(leaderboardRef, limit(50)));
+      entries = fallbackSnap.docs.map(doc => doc.data() as LeaderboardEntry);
+    }
+    
+    entries = entries.filter(e => (e.name || '').toUpperCase().trim() !== 'ADMIN');
+    
+    const bestUserEntries: Record<string, LeaderboardEntry> = {};
+    entries.forEach(entry => {
+      const userKey = (entry.name || '').toUpperCase().trim();
+      if (!userKey) return;
+      if (!bestUserEntries[userKey] || (entry.rate || 0) > (bestUserEntries[userKey].rate || 0)) {
+        bestUserEntries[userKey] = entry;
+      }
+    });
 
+    // 2. Also ensure recent shift summaries from all pickers are represented
     try {
-      const snapshot = await getDocs(q);
-      let entries = snapshot.docs.map(doc => doc.data() as LeaderboardEntry);
-      
-      entries = entries.filter(e => (e.name || '').toUpperCase().trim() !== 'ADMIN');
-      
-      const bestUserEntries: Record<string, LeaderboardEntry> = {};
-      entries.forEach(entry => {
-        const userKey = (entry.name || '').toUpperCase().trim();
-        if (!userKey) return;
-        if (!bestUserEntries[userKey] || (entry.rate || 0) > (bestUserEntries[userKey].rate || 0)) {
-          bestUserEntries[userKey] = entry;
+      const recentSummaries = await fetchAllShiftSummaries(force);
+      recentSummaries.forEach((s: any) => {
+        const uName = (s.userName || s.operator || '').toUpperCase().trim();
+        if (!uName || uName === 'ADMIN') return;
+        const sRate = s.finalRate || s.appRate || s.rate || (s.activeSeconds ? Math.round(((s.cases || s.totalCases || 0) / s.activeSeconds) * 3600) : 0);
+        if (sRate > 0) {
+          if (!bestUserEntries[uName] || sRate > (bestUserEntries[uName].rate || 0)) {
+            bestUserEntries[uName] = {
+              name: s.userName || s.operator || uName,
+              department: s.department || 'Aisles',
+              rate: sRate,
+              cases: s.cases || s.totalCases || 0,
+              date: s.date || localToday,
+              steps: s.steps || 0
+            };
+          }
         }
       });
-
-      const dailyBots = getDailyAIBots();
-      let uniqueEntries = [...Object.values(bestUserEntries), ...dailyBots];
-      uniqueEntries.sort((a, b) => (b.rate || 0) - (a.rate || 0));
-      uniqueEntries = uniqueEntries.slice(0, 25);
-      
-      setCachedData(cacheKey, uniqueEntries);
-      return uniqueEntries;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.LIST, 'leaderboard');
-      const cached = getCachedData<LeaderboardEntry[]>(cacheKey) || [];
-      const dailyBots = getDailyAIBots();
-      const combined = [...cached, ...dailyBots];
-      combined.sort((a, b) => (b.rate || 0) - (a.rate || 0));
-      return combined.slice(0, 25);
+    } catch (e) {
+      console.warn("Could not merge shift summaries into leaderboard:", e);
     }
+
+    const dailyBots = getDailyAIBots();
+    let uniqueEntries = [...Object.values(bestUserEntries), ...dailyBots];
+    uniqueEntries.sort((a, b) => (b.rate || 0) - (a.rate || 0));
+    uniqueEntries = uniqueEntries.slice(0, 25);
+    
+    setCachedData(cacheKey, uniqueEntries);
+    return uniqueEntries;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'leaderboard');
+    const cached = getCachedData<LeaderboardEntry[]>(cacheKey) || [];
+    const dailyBots = getDailyAIBots();
+    const combined = [...cached, ...dailyBots];
+    combined.sort((a, b) => (b.rate || 0) - (a.rate || 0));
+    return combined.slice(0, 25);
+  }
 };
 
 export const subscribeToLeaderboard = (
@@ -1575,32 +1605,37 @@ export const fetchAllShiftSummaries = async (force: boolean = false): Promise<Sh
     
     // Deduplicate by user and date to avoid inflating shift counts and total cases
     const deduplicated = new Map<string, ShiftSummary>();
-    rawSummaries.forEach(s => {
-        if (!s.date || !s.userName) return;
-        const name = s.userName.trim().toUpperCase();
+    rawSummaries.forEach((s: any) => {
+        const rawName = s.userName || s.operator || s.userId || s.name;
+        if (!rawName) return;
+        const name = String(rawName).trim().toUpperCase();
+        if (name === 'ADMIN') return;
         
-        let normDate = s.date;
-        if (normDate.includes('/')) {
-            const parts = normDate.split('/');
-            if (parts.length === 3) normDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
-        } else if (normDate.includes('-')) {
-            normDate = normDate.split('T')[0];
-        }
+        const rawDate = s.date || s.clockInTime || (s.timestamp?.seconds ? s.timestamp.seconds * 1000 : null) || s.createdDate;
+        const normDate = normalizeDateKey(rawDate);
+        if (!normDate) return;
         
         const key = `${name}_${normDate}`;
         const existing = deduplicated.get(key);
         
-        const cases = s.totalCases || (s as any).cases || 0;
-        const activeSec = s.activeSeconds || (s as any).totalSeconds || 0;
+        const cases = s.totalCases || s.cases || 0;
+        const activeSec = s.activeSeconds || s.totalSeconds || 0;
+        
+        // Ensure standard fields are populated on s
+        const standardized: ShiftSummary = {
+          ...s,
+          userName: s.userName || s.operator || name,
+          date: normDate
+        };
         
         if (!existing) {
-            deduplicated.set(key, s);
+            deduplicated.set(key, standardized);
         } else {
             const existingCases = existing.totalCases || (existing as any).cases || 0;
             const existingActiveSec = existing.activeSeconds || (existing as any).totalSeconds || 0;
             
             if (cases > existingCases || (cases === existingCases && activeSec > existingActiveSec)) {
-                deduplicated.set(key, s);
+                deduplicated.set(key, standardized);
             }
         }
     });

@@ -385,6 +385,14 @@ export async function clearLocalNotifications(userName: string): Promise<void> {
 }
 
 /**
+ * Delete a single notification by id from IndexedDB
+ */
+export async function deleteLocalNotification(id: string): Promise<void> {
+  if (!id) return;
+  await deleteLocalItem(STORES.NOTIFICATIONS, id);
+}
+
+/**
  * One-time silent migration from bloated localStorage to IndexedDB
  */
 export async function migrateLocalStorageToIndexedDB(): Promise<void> {

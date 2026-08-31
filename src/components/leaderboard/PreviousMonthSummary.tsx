@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Calendar, Award, TrendingUp, Clock, Package, ChevronLeft, ChevronRight, User, Sparkles } from 'lucide-react';
 import { ShiftSummary } from '../../services/leaderboardService';
 import { ThemeColors } from '../../types';
+import { normalizeDateKey } from '../../utils/dateUtils';
 
 interface PreviousMonthSummaryProps {
     summaries: ShiftSummary[];
@@ -78,18 +79,14 @@ export const PreviousMonthSummary: React.FC<PreviousMonthSummaryProps> = ({
         const deduplicatedShifts = new Map<string, any>();
         
         summaries.forEach((s) => {
-            if (!s.date || !s.userName) return;
-            const name = s.userName.trim().toUpperCase();
+            const rawName = s.userName || s.operator || s.userId || (s as any).name;
+            if (!rawName) return;
+            const name = String(rawName).trim().toUpperCase();
             if (name === 'ADMIN') return;
 
-            let normDate = s.date;
-            if (s.date.includes('/')) {
-                const parts = s.date.split('/');
-                if (parts.length === 3) normDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
-            } else if (s.date.includes('-')) {
-                // Keep YYYY-MM-DD
-                normDate = s.date;
-            }
+            const rawDate = s.date || s.clockInTime || (s.timestamp?.seconds ? s.timestamp.seconds * 1000 : null) || (s as any).createdDate;
+            const normDate = normalizeDateKey(rawDate);
+            if (!normDate) return;
 
             const key = `${name}_${normDate}`;
             const existing = deduplicatedShifts.get(key);
@@ -98,40 +95,22 @@ export const PreviousMonthSummary: React.FC<PreviousMonthSummaryProps> = ({
             const activeSec = s.activeSeconds || s.totalSeconds || 0;
 
             if (!existing) {
-                deduplicatedShifts.set(key, { ...s, _normDate: normDate, _cases: cases, _activeSec: activeSec });
+                deduplicatedShifts.set(key, { ...s, _normName: name, _normDate: normDate, _cases: cases, _activeSec: activeSec });
             } else {
                 if (cases > existing._cases || (cases === existing._cases && activeSec > existing._activeSec)) {
-                    deduplicatedShifts.set(key, { ...s, _normDate: normDate, _cases: cases, _activeSec: activeSec });
+                    deduplicatedShifts.set(key, { ...s, _normName: name, _normDate: normDate, _cases: cases, _activeSec: activeSec });
                 }
             }
         });
 
         Array.from(deduplicatedShifts.values()).forEach((s) => {
-            const name = s.userName.trim().toUpperCase();
+            const name = s._normName;
+            const normDate = s._normDate;
             
-            // Check if summary belongs to target month
-            // Date format could be YYYY-MM-DD or DD/MM/YYYY
-            let shiftYear = 0;
-            let shiftMonth = 0; // 1-indexed
-
-            if (s.date.includes('-')) {
-                const parts = s.date.split('-');
-                if (parts.length >= 2) {
-                    shiftYear = parseInt(parts[0], 10);
-                    shiftMonth = parseInt(parts[1], 10);
-                }
-            } else if (s.date.includes('/')) {
-                const parts = s.date.split('/');
-                if (parts.length === 3) {
-                    shiftYear = parseInt(parts[2], 10);
-                    shiftMonth = parseInt(parts[1], 10);
-                }
-            }
-
-            if (shiftYear === selectedYear && shiftMonth === selectedMonth + 1) {
+            if (normDate.startsWith(targetPrefix)) {
                 if (!userMap.has(name)) {
                     userMap.set(name, {
-                        userName: s.userName.trim(),
+                        userName: s.userName || s.operator || name,
                         departments: new Map(),
                         totalCases: 0,
                         totalActiveSeconds: 0,

@@ -37,7 +37,8 @@ import {
 import { 
     getLocalRota, saveLocalRota, getAllLocalItems, STORES, migrateLocalStorageToIndexedDB, 
     saveLocalActiveShift, saveLocalNotification, getLocalNotifications, 
-    markNotificationAsRead, markAllNotificationsAsRead, clearLocalNotifications 
+    markNotificationAsRead, markAllNotificationsAsRead, clearLocalNotifications,
+    deleteLocalNotification
 } from './services/indexedDbService';
 import { compressImage } from './lib/imageCompressor';
 import { deviceHaptic, deviceExport, saveImageToDevice } from './lib/deviceApi';
@@ -473,6 +474,16 @@ export default function App() {
             showToast("Notification history cleared", "info");
         } catch (e) {}
     }, [shiftData.operator, userProfile?.username, showToast]);
+
+    const handleDeleteNotification = useCallback(async (id: string) => {
+        setShiftNotifications(prev => prev.filter(n => n.id !== id));
+        try {
+            await deleteLocalNotification(id);
+            showToast("Notification removed", "info");
+        } catch (e) {
+            console.warn('Failed to delete notification from IndexedDB:', e);
+        }
+    }, [showToast]);
 
     useEffect(() => {
         // Record user activity and initialize 3-day inactivity notification scheduler
@@ -2764,7 +2775,7 @@ export default function App() {
             const shiftStartDate = shiftData.firstStartTime ? new Date(shiftData.firstStartTime) : now;
             const fileDateISO = shiftStartDate.toISOString().split('T')[0];
             const operatorName = (shiftData.operator || 'UNKNOWN').toUpperCase().trim();
-            const fileName = `Work/${shiftStartDate.getFullYear()}/${(shiftStartDate.getMonth() + 1).toString().padStart(2, '0')}/ShiftReport_${operatorName}_${fileDateISO.replace(/-/g, '')}.csv`;
+            const fileName = `ShiftReport_${operatorName}_${fileDateISO.replace(/-/g, '')}.csv`;
 
             const success = await deviceExport(fullReport, fileName, true);
             if (success) {
@@ -3973,6 +3984,7 @@ export default function App() {
                 onMarkAsRead={handleMarkNotificationAsRead}
                 onMarkAllAsRead={handleMarkAllNotificationsAsRead}
                 onClearAll={handleClearAllNotifications}
+                onDeleteNotification={handleDeleteNotification}
                 onSendInteractionReply={async (recipient, type) => {
                     const sender = (shiftData.operator || userProfile?.username || 'Teammate').toUpperCase().trim();
                     const res = await sendSocialInteraction(sender, recipient, type);

@@ -70,11 +70,43 @@ function formatTimeFromSecs(secs: number): string {
 export function generateFullShiftReport(shift: any): string {
   const operatorName = (shift.userName || shift.operator || 'UNKNOWN').toUpperCase().trim();
   const dateStr = shift.date || new Date(shift.clockInTime || Date.now()).toISOString().split('T')[0];
-  const clockInMs = shift.clockInTime || Date.now();
-  const clockOutMs = shift.clockOutTime || (shift.clockInTime && shift.totalSeconds ? shift.clockInTime + shift.totalSeconds * 1000 : Date.now());
   
-  const clockInFormatted = new Date(clockInMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const clockOutFormatted = new Date(clockOutMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const history = Array.isArray(shift.history) ? shift.history : [];
+  const firstHistStart = history.length > 0 && history[0].start && history[0].start !== '--:--' ? history[0].start : null;
+  const lastHistFinish = history.length > 0 && history[history.length - 1].finish && history[history.length - 1].finish !== '--:--' ? history[history.length - 1].finish : null;
+
+  const rawClockIn = shift.firstStartTime || shift.startTime || firstHistStart;
+  let clockInMs = shift.clockInTime;
+  let clockInFormatted = rawClockIn;
+
+  if (!clockInFormatted && clockInMs) {
+    clockInFormatted = new Date(clockInMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } else if (!clockInFormatted) {
+    clockInFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  if (!clockInMs) {
+    if (rawClockIn && dateStr) {
+      try {
+        const [h, m] = rawClockIn.split(':').map((x: string) => parseInt(x, 10));
+        const d = new Date(dateStr);
+        if (!isNaN(h) && !isNaN(m)) {
+          d.setHours(h, m, 0, 0);
+          clockInMs = d.getTime();
+        }
+      } catch (e) {
+        clockInMs = Date.now();
+      }
+    } else {
+      clockInMs = Date.now();
+    }
+  }
+
+  let clockOutFormatted = shift.clockOutFormatted || lastHistFinish;
+  let clockOutMs = shift.clockOutTime || (clockInMs && shift.totalSeconds ? clockInMs + shift.totalSeconds * 1000 : Date.now());
+  if (!clockOutFormatted && clockOutMs) {
+    clockOutFormatted = new Date(clockOutMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
   
   const totalCases = shift.totalCases || shift.cases || 0;
   const appRate = shift.finalRate || shift.rate || 0;
@@ -84,8 +116,6 @@ export function generateFullShiftReport(shift: any): string {
   const dept = shift.department || 'ambient/aisle_3';
   const zone = shift.zone || 'AMBIENT';
   const storeLabel = shift.storeLabel || '';
-  
-  const history = Array.isArray(shift.history) ? shift.history : [];
   
   // Calculate Peak Rate
   const pickRates = history

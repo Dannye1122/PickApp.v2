@@ -14,6 +14,7 @@ interface NotificationHubModalProps {
   onMarkAsRead: (id: string) => void;
   onMarkAllAsRead: () => void;
   onClearAll: () => void;
+  onDeleteNotification?: (id: string) => void;
   onSendInteractionReply?: (recipient: string, type: InteractionType, customText?: string) => Promise<void>;
   currentOperator: string;
 }
@@ -25,6 +26,7 @@ export const NotificationHubModal: React.FC<NotificationHubModalProps> = ({
   onMarkAsRead,
   onMarkAllAsRead,
   onClearAll,
+  onDeleteNotification,
   onSendInteractionReply,
   currentOperator
 }) => {
@@ -224,92 +226,134 @@ export const NotificationHubModal: React.FC<NotificationHubModalProps> = ({
                 </p>
               </div>
             ) : (
-              filteredNotifications.map((item) => {
-                const isPeer = item.category === 'peer' && item.senderName;
-                const canReply = isPeer && item.senderName !== currentOperator && !!onSendInteractionReply;
+              <AnimatePresence mode="popLayout">
+                {filteredNotifications.map((item) => {
+                  const isPeer = item.category === 'peer' && item.senderName;
+                  const canReply = isPeer && item.senderName !== currentOperator && !!onSendInteractionReply;
 
-                return (
-                  <div
-                    key={item.id}
-                    id={`notification-item-${item.id}`}
-                    onClick={() => onMarkAsRead(item.id)}
-                    className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
-                      item.isRead
-                        ? 'bg-slate-950/40 border-slate-800/60 opacity-80 hover:opacity-100 hover:border-slate-700'
-                        : 'bg-slate-800/70 border-indigo-500/30 shadow-md shadow-indigo-500/5'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2.5 mb-1.5">
-                      <div className="flex items-center gap-2">
-                        <div className={`p-1.5 rounded-xl border ${getCategoryBadgeClass(item.category)}`}>
-                          {getCategoryIcon(item.category, item.interactionType)}
-                        </div>
-                        <div>
-                          <span className="text-xs font-bold text-slate-200">
-                            {item.title}
-                          </span>
-                          {!item.isRead && (
-                            <span className="ml-2 inline-block w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
-                          )}
+                  return (
+                    <motion.div
+                      key={item.id}
+                      layout
+                      initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, x: -200, height: 0, marginBottom: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="relative overflow-hidden rounded-2xl"
+                    >
+                      {/* Swipe Delete Background Reveal */}
+                      <div className="absolute inset-0 bg-rose-600/90 rounded-2xl flex items-center justify-end px-4 z-0">
+                        <div className="flex items-center gap-1.5 text-white font-bold text-xs uppercase tracking-wider">
+                          <Trash2 className="w-4 h-4" />
+                          <span>Delete</span>
                         </div>
                       </div>
 
-                      <span className="text-[10px] text-slate-400 font-mono flex items-center gap-1 shrink-0">
-                        <Clock className="w-3 h-3" />
-                        {formatTimestamp(item.timestamp)}
-                      </span>
-                    </div>
-
-                    <p className="text-xs text-slate-300 pl-8 mb-2 leading-relaxed">
-                      {item.message}
-                    </p>
-
-                    {/* Peer Quick Interaction Actions */}
-                    {canReply && (
-                      <div 
-                        className="pl-8 pt-2 mt-2 border-t border-slate-800/80 flex flex-wrap items-center gap-1.5"
-                        onClick={(e) => e.stopPropagation()}
+                      {/* Draggable Notification Card */}
+                      <motion.div
+                        drag="x"
+                        dragConstraints={{ left: -100, right: 0 }}
+                        dragElastic={0.15}
+                        onDragEnd={(_, info) => {
+                          if ((info.offset.x < -60 || info.velocity.x < -300) && onDeleteNotification) {
+                            onDeleteNotification(item.id);
+                          }
+                        }}
+                        id={`notification-item-${item.id}`}
+                        onClick={() => onMarkAsRead(item.id)}
+                        className={`relative z-10 p-3.5 rounded-2xl border transition-colors cursor-pointer select-none ${
+                          item.isRead
+                            ? 'bg-slate-950 border-slate-800/80 opacity-80 hover:opacity-100 hover:border-slate-700'
+                            : 'bg-slate-900 border-indigo-500/30 shadow-md shadow-indigo-500/5'
+                        }`}
                       >
-                        <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mr-1">
-                          Reply to {item.senderName}:
-                        </span>
-                        <button
-                          onClick={() => handleQuickReply(item.senderName!, 'thumbs_up')}
-                          disabled={isSendingReply}
-                          className="px-2.5 py-1 bg-slate-800 hover:bg-emerald-500/20 text-slate-300 hover:text-emerald-300 border border-slate-700 hover:border-emerald-500/40 rounded-lg text-xs font-medium flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50"
-                        >
-                          <ThumbsUp className="w-3 h-3 text-emerald-400" />
-                          <span>Thumbs Up</span>
-                        </button>
-                        <button
-                          onClick={() => handleQuickReply(item.senderName!, 'poke')}
-                          disabled={isSendingReply}
-                          className="px-2.5 py-1 bg-slate-800 hover:bg-amber-500/20 text-slate-300 hover:text-amber-300 border border-slate-700 hover:border-amber-500/40 rounded-lg text-xs font-medium flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50"
-                        >
-                          <Hand className="w-3 h-3 text-amber-400" />
-                          <span>Poke Back</span>
-                        </button>
-                        <button
-                          onClick={() => handleQuickReply(item.senderName!, 'congrats')}
-                          disabled={isSendingReply}
-                          className="px-2.5 py-1 bg-slate-800 hover:bg-sky-500/20 text-slate-300 hover:text-sky-300 border border-slate-700 hover:border-sky-500/40 rounded-lg text-xs font-medium flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50"
-                        >
-                          <Trophy className="w-3 h-3 text-sky-400" />
-                          <span>Cheer</span>
-                        </button>
-                        <button
-                          onClick={() => handleQuickReply(item.senderName!, 'tease')}
-                          disabled={isSendingReply}
-                          className="px-2.5 py-1 bg-slate-800 hover:bg-rose-500/20 text-slate-300 hover:text-rose-300 border border-slate-700 hover:border-rose-500/40 rounded-lg text-xs font-medium flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50"
-                        >
-                          <Flame className="w-3 h-3 text-rose-400" />
-                          <span>Banter</span>
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })
+                        <div className="flex items-start justify-between gap-2.5 mb-1.5">
+                          <div className="flex items-center gap-2">
+                            <div className={`p-1.5 rounded-xl border ${getCategoryBadgeClass(item.category)}`}>
+                              {getCategoryIcon(item.category, item.interactionType)}
+                            </div>
+                            <div>
+                              <span className="text-xs font-bold text-slate-200">
+                                {item.title}
+                              </span>
+                              {!item.isRead && (
+                                <span className="ml-2 inline-block w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              {formatTimestamp(item.timestamp)}
+                            </span>
+                            {onDeleteNotification && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onDeleteNotification(item.id);
+                                }}
+                                className="p-1 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition-colors"
+                                title="Delete notification"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-slate-300 pl-8 mb-2 leading-relaxed">
+                          {item.message}
+                        </p>
+
+                        {/* Peer Quick Interaction Actions */}
+                        {canReply && (
+                          <div 
+                            className="pl-8 pt-2 mt-2 border-t border-slate-800/80 flex flex-wrap items-center gap-1.5"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mr-1">
+                              Reply to {item.senderName}:
+                            </span>
+                            <button
+                              onClick={() => handleQuickReply(item.senderName!, 'thumbs_up')}
+                              disabled={isSendingReply}
+                              className="px-2.5 py-1 bg-slate-800 hover:bg-emerald-500/20 text-slate-300 hover:text-emerald-300 border border-slate-700 hover:border-emerald-500/40 rounded-lg text-xs font-medium flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50"
+                            >
+                              <ThumbsUp className="w-3 h-3 text-emerald-400" />
+                              <span>Thumbs Up</span>
+                            </button>
+                            <button
+                              onClick={() => handleQuickReply(item.senderName!, 'poke')}
+                              disabled={isSendingReply}
+                              className="px-2.5 py-1 bg-slate-800 hover:bg-amber-500/20 text-slate-300 hover:text-amber-300 border border-slate-700 hover:border-amber-500/40 rounded-lg text-xs font-medium flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50"
+                            >
+                              <Hand className="w-3 h-3 text-amber-400" />
+                              <span>Poke Back</span>
+                            </button>
+                            <button
+                              onClick={() => handleQuickReply(item.senderName!, 'congrats')}
+                              disabled={isSendingReply}
+                              className="px-2.5 py-1 bg-slate-800 hover:bg-sky-500/20 text-slate-300 hover:text-sky-300 border border-slate-700 hover:border-sky-500/40 rounded-lg text-xs font-medium flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50"
+                            >
+                              <Trophy className="w-3 h-3 text-sky-400" />
+                              <span>Cheer</span>
+                            </button>
+                            <button
+                              onClick={() => handleQuickReply(item.senderName!, 'tease')}
+                              disabled={isSendingReply}
+                              className="px-2.5 py-1 bg-slate-800 hover:bg-rose-500/20 text-slate-300 hover:text-rose-300 border border-slate-700 hover:border-rose-500/40 rounded-lg text-xs font-medium flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50"
+                            >
+                              <Flame className="w-3 h-3 text-rose-400" />
+                              <span>Banter</span>
+                            </button>
+                          </div>
+                        )}
+                      </motion.div>
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
             )}
           </div>
 
