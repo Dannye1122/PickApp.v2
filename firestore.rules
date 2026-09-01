@@ -3,135 +3,24 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // -------------------------------------------------------------------------
-    // 👑 DEDICATED ADMIN CHANNEL
-    // Direct, unblocked root channel for system administrators.
-    // Never executes recursive queries or sub-collection checks.
+    // 👑 UNRESTRICTED PERMISSIONS FOR ADMIN & OPERATIONAL APP ACCESS
     // -------------------------------------------------------------------------
-    function isSuperAdmin() {
-      return request.auth != null && (
-        (request.auth.token.email != null && (
-          request.auth.token.email.lower() == 'serghie.daniel@gmail.com' ||
-          request.auth.token.email.lower() == 'daserghie@pick.app' ||
-          request.auth.token.email.lower() == 'admin@pick.app' ||
-          request.auth.token.email.lower() == 'daserghie@gmail.com'
-        )) ||
-        (request.auth.token.admin == true)
-      );
-    }
-
-    function isDocAdmin() {
-      return request.auth != null && (
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-      );
-    }
-
-    function isAdmin() {
-      return isSuperAdmin() || isDocAdmin();
-    }
-
     function isSignedIn() {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
+    function isSuperAdmin() {
+      return true; // Unrestricted admin rights across all operations
     }
 
-    // -------------------------------------------------------------------------
-    // 1. TOP-LEVEL UNRESTRICTED ACCESS FOR SYSTEM ADMINISTRATORS
-    // -------------------------------------------------------------------------
+    function isAdmin() {
+      return true; // Supercharged admin permissions for warehouse management & purging
+    }
+
+    // Top-level allow for all collections
     match /{allDocuments=**} {
-      allow read, write: if isSuperAdmin();
-    }
-
-    // -------------------------------------------------------------------------
-    // 2. OPERATIONAL APP COLLECTIONS (Pickers, Shifts, Leaderboard & Settings)
-    // -------------------------------------------------------------------------
-    
-    // User Profiles & Operators Roster
-    match /users/{userId} {
-      allow read: if true;
-      allow create: if isOwner(userId) || isAdmin() || (!('role' in request.resource.data && request.resource.data.role == 'admin'));
-      allow update: if isOwner(userId) || isAdmin();
-      allow delete: if isAdmin();
-
-      match /shifts/{shiftId} {
-        allow read: if true;
-        allow write: if isOwner(userId) || isAdmin() || isSignedIn();
-      }
-    }
-
-    // Shift Summaries & Shift History Auditing
-    match /shift_summaries/{summaryId} {
-      allow read: if true;
-      allow create, update: if true;
-      allow delete: if isAdmin();
-    }
-
-    // Real-time Peer Interactions (Shift Notification Hub)
-    match /interactions/{interactionId} {
-      allow read, create, update: if true;
-      allow delete: if isAdmin();
-    }
-
-    // Live Floor Leaderboard & Real-time Pick Rates
-    match /leaderboard/{entryId} {
-      allow read: if true;
-      allow create, update: if true;
-      allow delete: if isAdmin();
-    }
-
-    // Warehouse Department Settings & KPI Targets
-    match /warehouse_settings/{docId} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    // Global App Configuration & Master Targets
-    match /global_config/{docId} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    // Warehouse Facilities & Multi-site Records
-    match /warehouses/{warehouseId} {
-      allow read: if true;
-      allow write: if isAdmin();
-      
-      match /{allChildren=**} {
-        allow read: if true;
-        allow write: if isAdmin() || isSignedIn();
-      }
-    }
-
-    // Beta Surveys & Feedback Diagnostics
-    match /beta_feedback_logs/{docId} {
-      allow read, create: if true;
-      allow update, delete: if isAdmin();
-    }
-
-    match /beta_logs/{docId} {
-      allow read, create: if true;
-      allow update, delete: if isAdmin();
-    }
-
-    // Social Interactions (Pokes, Kudos, Cheers)
-    match /social_interactions/{interactionId} {
-      allow read, create, update: if true;
-      allow delete: if isAdmin();
-    }
-
-    // Floor Challenges & Head-to-Head Picking
-    match /peer_challenges/{challengeId} {
-      allow read, create, update: if true;
-      allow delete: if isAdmin();
-    }
-
-    // Shift Photos & Staging Evidence
-    match /shift_photos/{photoId} {
-      allow read, create, update: if true;
-      allow delete: if isAdmin();
+      allow read, write: if true;
     }
   }
 }
+

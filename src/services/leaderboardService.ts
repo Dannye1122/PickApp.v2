@@ -22,7 +22,7 @@ import { normalizeDateKey } from '../utils/dateUtils';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { canFetchData, getCachedData, setCachedData, markDataFetched, markQuotaExceeded, isQuotaExceeded } from '../utils/quotaManager';
+import { canFetchData, getCachedData, setCachedData, markDataFetched, markQuotaExceeded, isQuotaExceeded, getOptimalLiveInterval } from '../utils/quotaManager';
 import { STORES, getLocalItem, saveLocalItem, saveLocalItems, getAllLocalItems, deleteLocalItem, saveLocalRota, saveLocalShiftSummaries, getLocalShiftSummaries } from './indexedDbService';
 
 import { UserRole, UserProfile } from '../types';
@@ -220,49 +220,36 @@ export const subscribeToLeaderboard = (
   warehouseId: string,
   callback: (entries: LeaderboardEntry[]) => void
 ) => {
-  const leaderboardRef = collection(db, 'leaderboard');
-  const now = new Date();
-  const localToday = getLocalDateString(now);
-  const localYesterday = getLocalDateString(new Date(now.getTime() - 86400000));
-  const utcToday = now.toISOString().split('T')[0];
-  const utcYesterday = new Date(now.getTime() - 86400000).toISOString().split('T')[0];
-  
-  const targetDates = Array.from(new Set([localToday, localYesterday, utcToday, utcYesterday]));
+  let isMounted = true;
 
-  const q = query(
-    leaderboardRef, 
-    where('date', 'in', targetDates)
-  );
-
-  return onSnapshot(q, (snapshot) => {
-    let entries = snapshot.docs.map(doc => doc.data() as LeaderboardEntry);
-    
-    entries = entries.filter(e => (e.name || '').toUpperCase().trim() !== 'ADMIN');
-    
-    const bestUserEntries: Record<string, LeaderboardEntry> = {};
-    entries.forEach(entry => {
-      const userKey = (entry.name || '').toUpperCase().trim();
-      if (!userKey) return;
-      if (!bestUserEntries[userKey] || (entry.rate || 0) > (bestUserEntries[userKey].rate || 0)) {
-        bestUserEntries[userKey] = entry;
+  const refresh = async () => {
+    if (!isMounted) return;
+    try {
+      const entries = await fetchLeaderboard(warehouseId);
+      if (isMounted) {
+        callback(entries);
       }
-    });
-
-    const dailyBots = getDailyAIBots();
-    let uniqueEntries = [...Object.values(bestUserEntries), ...dailyBots];
-    uniqueEntries.sort((a, b) => (b.rate || 0) - (a.rate || 0));
-    uniqueEntries = uniqueEntries.slice(0, 25);
-    
-    callback(uniqueEntries);
-  }, (error) => {
-    const rawMsg = error?.message || String(error);
-    if (rawMsg.includes('Quota limit exceeded') || rawMsg.includes('Quota exceeded') || (error as any)?.code === 'resource-exhausted') {
-      markQuotaExceeded();
-      console.warn("[PickApp Guardian] Leaderboard subscription paused due to quota limits.");
-      return;
+    } catch (err) {
+      const cached = getCachedData<LeaderboardEntry[]>(`leaderboard_${warehouseId}`) || [];
+      const dailyBots = getDailyAIBots();
+      const combined = [...cached, ...dailyBots];
+      combined.sort((a, b) => (b.rate || 0) - (a.rate || 0));
+      if (isMounted) {
+        callback(combined.slice(0, 25));
+      }
     }
-    console.error("Leaderboard subscription error", error);
-  });
+  };
+
+  // Initial load
+  refresh();
+
+  // Throttled interval polling (respects quotaManager)
+  const interval = setInterval(refresh, getOptimalLiveInterval());
+
+  return () => {
+    isMounted = false;
+    clearInterval(interval);
+  };
 };
 
 export const clearLeaderboard = async () => {
@@ -400,87 +387,34 @@ export const fetchLiveUsers = async (warehouseId: string, force: boolean = false
 };
 
 export const subscribeToLiveUsers = (warehouseId: string, callback: (users: any[]) => void) => {
-  const liveRef = collection(db, 'leaderboard');
-  const q = query(liveRef, where('type', '==', 'live'));
+  let isMounted = true;
 
-  return onSnapshot(q, (snapshot) => {
-    const rawUsers = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...(doc.data() as any)
-    }));
-
-    const fiveMinutesAgoMs = Date.now() - 300000;
-    const recentUsers = rawUsers.filter(u => {
-      if (warehouseId && warehouseId.toUpperCase() !== 'ALL' && u.warehouseId && u.warehouseId.toUpperCase() !== warehouseId.toUpperCase()) {
-        console.log("Filtered out due to warehouse mismatch:", u);
-        return false;
+  const refresh = async () => {
+    if (!isMounted) return;
+    try {
+      const users = await fetchLiveUsers(warehouseId);
+      if (isMounted) {
+        callback(users);
       }
-      
-      let updateMs = Date.now();
-      if (u.lastUpdate) {
-          if (typeof u.lastUpdate.toMillis === 'function') {
-              updateMs = u.lastUpdate.toMillis();
-          } else if (u.lastUpdate.seconds) {
-              updateMs = u.lastUpdate.seconds * 1000;
-          } else if (typeof u.lastUpdate === 'number') {
-              updateMs = u.lastUpdate;
-          } else if (u.lastUpdate instanceof Date) {
-              updateMs = u.lastUpdate.getTime();
-          }
+    } catch (err) {
+      const cached = getCachedData<any[]>(`liveusers_${warehouseId}`) || [];
+      const liveBots = getDailyAILiveUsers();
+      if (isMounted) {
+        callback(cached.length > 0 ? cached : liveBots);
       }
-      
-      const isRecent = updateMs >= fiveMinutesAgoMs;
-      if (!isRecent) {
-          console.log("Filtered out due to time:", u.name, "UpdateMs:", updateMs, "FiveMinsAgo:", fiveMinutesAgoMs);
-      }
-      return isRecent;
-    });
-
-    console.log("Recent live users:", recentUsers);
-
-    // De-duplicate by name (most recent update wins)
-    const uniqueUsers: Record<string, any> = {};
-    recentUsers.forEach(user => {
-      const name = (user.name || '').toUpperCase().trim();
-      
-      let userUpdateMs = Date.now();
-      if (user.lastUpdate) {
-          if (typeof user.lastUpdate.toMillis === 'function') userUpdateMs = user.lastUpdate.toMillis();
-          else if (user.lastUpdate.seconds) userUpdateMs = user.lastUpdate.seconds * 1000;
-          else if (typeof user.lastUpdate === 'number') userUpdateMs = user.lastUpdate;
-          else if (user.lastUpdate instanceof Date) userUpdateMs = user.lastUpdate.getTime();
-      }
-
-      let existingUpdateMs = 0;
-      if (uniqueUsers[name] && uniqueUsers[name].lastUpdate) {
-          const eu = uniqueUsers[name];
-          if (typeof eu.lastUpdate.toMillis === 'function') existingUpdateMs = eu.lastUpdate.toMillis();
-          else if (eu.lastUpdate.seconds) existingUpdateMs = eu.lastUpdate.seconds * 1000;
-          else if (typeof eu.lastUpdate === 'number') existingUpdateMs = eu.lastUpdate;
-          else if (eu.lastUpdate instanceof Date) existingUpdateMs = eu.lastUpdate.getTime();
-      } else if (uniqueUsers[name] && !uniqueUsers[name].lastUpdate) {
-          existingUpdateMs = Date.now();
-      }
-
-      if (!uniqueUsers[name] || userUpdateMs > existingUpdateMs) {
-        uniqueUsers[name] = user;
-      }
-    });
-
-    const liveBots = getDailyAILiveUsers();
-    const uniqueUsersList = [...Object.values(uniqueUsers), ...liveBots];
-    callback(uniqueUsersList);
-  }, (error) => {
-    const rawMsg = error?.message || String(error);
-    if (rawMsg.includes('Quota limit exceeded') || rawMsg.includes('Quota exceeded') || (error as any)?.code === 'resource-exhausted') {
-      markQuotaExceeded();
-      console.warn("[PickApp Guardian] Live users subscription paused due to quota limits.");
-    } else {
-      console.warn("Live users subscription error fallback to bots:", error);
     }
-    const liveBots = getDailyAILiveUsers();
-    callback(liveBots);
-  });
+  };
+
+  // Initial load
+  refresh();
+
+  // Throttled interval polling
+  const interval = setInterval(refresh, getOptimalLiveInterval());
+
+  return () => {
+    isMounted = false;
+    clearInterval(interval);
+  };
 };
 
 export const saveToLeaderboard = async (entry: Omit<LeaderboardEntry, 'timestamp'>) => {
@@ -673,9 +607,20 @@ export const saveShiftSummary = async (summary: Omit<ShiftSummary, 'timestamp' |
         // Local save failed; proceed silently.
     }
     
-    // Queue to syncManager instead of direct setDoc
+    // Direct setDoc write to Firestore for instant cloud persistence
+    try {
+      await setDoc(summaryDocRef, summaryData, { merge: true });
+    } catch (directError) {
+      console.warn("Direct Firestore setDoc in saveShiftSummary failed, syncManager backup will handle retry:", directError);
+    }
+    
+    // Queue to syncManager as offline backup and trigger sync
     syncManager.enqueue('shiftSummary', { docId, summaryData });
-    // Shift summary queued for sync successfully
+    try {
+      syncManager.sync();
+    } catch (syncErr) {
+      // Ignore background sync trigger errors
+    }
     return true;
   } catch (error) {
     // Operation failed silently.
