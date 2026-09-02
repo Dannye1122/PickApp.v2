@@ -47,12 +47,16 @@ export const ItalianCoachModal: React.FC<ItalianCoachModalProps> = ({
         return parseFloat(localStorage.getItem('italian_coach_volume') || '1.0');
     });
 
-    const [activeTab, setActiveTab] = useState<'study' | 'quiz' | 'settings'>('study');
+    const [activeTab, setActiveTab] = useState<'study' | 'quiz' | 'settings' | 'ai'>('study');
     const [currentVocabIndex, setCurrentVocabIndex] = useState(0);
     const [repetitionCount, setRepetitionCount] = useState<number>(() => {
         return parseInt(localStorage.getItem('italian_coach_rep_count') || '0', 10);
     });
     const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+
+    // AI Teacher state
+    const [aiLesson, setAiLesson] = useState<string>('');
+    const [isGenerating, setIsGenerating] = useState(false);
 
     // Quiz state
     const [quizAnswers, setQuizAnswers] = useState<Record<number, number>>({});
@@ -144,7 +148,7 @@ export const ItalianCoachModal: React.FC<ItalianCoachModalProps> = ({
                     </div>
 
                     {/* Navigation Tabs */}
-                    <div className="grid grid-cols-3 gap-1 p-2 bg-slate-950/60 border-b border-slate-800 text-xs">
+                    <div className="grid grid-cols-4 gap-1 p-2 bg-slate-950/60 border-b border-slate-800 text-xs">
                         <button 
                             onClick={() => setActiveTab('study')}
                             className={`py-2 rounded-xl font-bold transition-all flex items-center justify-center gap-1.5 ${
@@ -152,7 +156,7 @@ export const ItalianCoachModal: React.FC<ItalianCoachModalProps> = ({
                             }`}
                         >
                             <Languages size={14} />
-                            Shift Practice
+                            Study
                         </button>
                         <button 
                             onClick={() => setActiveTab('quiz')}
@@ -161,7 +165,16 @@ export const ItalianCoachModal: React.FC<ItalianCoachModalProps> = ({
                             }`}
                         >
                             <HelpCircle size={14} />
-                            Unit Quiz
+                            Quiz
+                        </button>
+                        <button 
+                            onClick={() => setActiveTab('ai')}
+                            className={`py-2 rounded-xl font-bold transition-all flex items-center justify-center gap-1.5 ${
+                                activeTab === 'ai' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                            }`}
+                        >
+                            <Sparkles size={14} />
+                            Teacher
                         </button>
                         <button 
                             onClick={() => setActiveTab('settings')}
@@ -347,7 +360,38 @@ export const ItalianCoachModal: React.FC<ItalianCoachModalProps> = ({
                             </div>
                         )}
 
-                        {/* TAB 3: INTERVALS & LESSON SETTINGS */}
+                        {/* TAB 3: AI TEACHER */}
+                        {activeTab === 'ai' && (
+                            <div className="space-y-4">
+                                <button 
+                                    onClick={async () => {
+                                        setIsGenerating(true);
+                                        try {
+                                            const response = await fetch('/api/italian-lesson', {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ prompt: 'Generate a comprehensive Italian lesson for a warehouse operator beginner. Include grammar, vocabulary, and practice.' }),
+                                            });
+                                            const data = await response.json();
+                                            setAiLesson(data.lesson);
+                                        } catch (e) {
+                                            setAiLesson('Failed to generate lesson. Please try again.');
+                                        } finally {
+                                            setIsGenerating(false);
+                                        }
+                                    }}
+                                    disabled={isGenerating}
+                                    className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase rounded-2xl shadow-lg transition-all"
+                                >
+                                    {isGenerating ? 'Generating...' : 'Get New Lesson'}
+                                </button>
+                                <div className="bg-slate-950 p-4 rounded-2xl text-slate-300 text-xs leading-relaxed min-h-[200px]">
+                                    {aiLesson ? <pre className="whitespace-pre-wrap font-sans">{aiLesson}</pre> : 'Click the button above to start your lesson.'}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* TAB 4: INTERVALS & LESSON SETTINGS */}
                         {activeTab === 'settings' && (
                             <div className="space-y-4 text-xs">
                                 {/* Lesson Unit Selector */}

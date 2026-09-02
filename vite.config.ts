@@ -14,7 +14,6 @@ export default defineConfig(({ mode }) => {
       tailwindcss()
     ],
     define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
       '__BUILD_DATE__': JSON.stringify(buildDate),
       '__BUILD_TIMESTAMP__': JSON.stringify(buildTime),
     },
