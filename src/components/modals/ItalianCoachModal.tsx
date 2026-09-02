@@ -55,8 +55,50 @@ export const ItalianCoachModal: React.FC<ItalianCoachModalProps> = ({
     const [isPlayingAudio, setIsPlayingAudio] = useState(false);
 
     // AI Teacher state
-    const [aiLesson, setAiLesson] = useState<string>('');
+    const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'model', parts: { text: string }[] }[]>([]);
+    const [input, setInput] = useState('');
     const [isGenerating, setIsGenerating] = useState(false);
+    const [isListening, setIsListening] = useState(false);
+    const chatEndRef = useRef<HTMLDivElement>(null);
+    const recognitionRef = useRef<any>(null);
+
+    useEffect(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [chatHistory]);
+
+    useEffect(() => {
+        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (SpeechRecognition) {
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'en-US';
+            recognition.continuous = false;
+            recognition.interimResults = false;
+
+            recognition.onresult = (event: any) => {
+                const transcript = event.results[0][0].transcript;
+                setInput(transcript);
+                setIsListening(false);
+                // Automatically send message after dictation
+                setTimeout(() => handleSendMessage(transcript), 500);
+            };
+
+            recognition.onerror = () => {
+                setIsListening(false);
+            };
+
+            recognitionRef.current = recognition;
+        }
+    }, []);
+
+    const toggleListening = () => {
+        if (isListening) {
+            recognitionRef.current?.stop();
+            setIsListening(false);
+        } else {
+            recognitionRef.current?.start();
+            setIsListening(true);
+        }
+    };
 
     // Quiz state
     const [quizAnswers, setQuizAnswers] = useState<Record<number, number>>({});
@@ -105,6 +147,31 @@ export const ItalianCoachModal: React.FC<ItalianCoachModalProps> = ({
 
         if (score === currentLesson.quiz.length && onRewardXP) {
             onRewardXP(150); // bonus XP for perfect score
+        }
+    };
+
+    const handleSendMessage = async (dictatedText?: string) => {
+        const textToSend = dictatedText || input;
+        if (!textToSend.trim()) return;
+        const userMsg = { role: 'user' as const, parts: [{ text: textToSend }] };
+        const newHistory = [...chatHistory, userMsg];
+        setChatHistory(newHistory);
+        setInput('');
+        setIsGenerating(true);
+
+        try {
+            const response = await fetch('/api/italian-lesson', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ messages: newHistory }),
+            });
+            const data = await response.json();
+            setChatHistory([...newHistory, { role: 'model' as const, parts: [{ text: data.reply }] }]);
+            voiceService.speak(data.reply, { lang: 'it-IT', volume: audioVolume });
+        } catch (e) {
+            setChatHistory([...newHistory, { role: 'model' as const, parts: [{ text: 'Failed to generate response. Please try again.' }] }]);
+        } finally {
+            setIsGenerating(false);
         }
     };
 
@@ -362,31 +429,36 @@ export const ItalianCoachModal: React.FC<ItalianCoachModalProps> = ({
 
                         {/* TAB 3: AI TEACHER */}
                         {activeTab === 'ai' && (
-                            <div className="space-y-4">
-                                <button 
-                                    onClick={async () => {
-                                        setIsGenerating(true);
-                                        try {
-                                            const response = await fetch('/api/italian-lesson', {
-                                                method: 'POST',
-                                                headers: { 'Content-Type': 'application/json' },
-                                                body: JSON.stringify({ prompt: 'Generate a comprehensive Italian lesson for a warehouse operator beginner. Include grammar, vocabulary, and practice.' }),
-                                            });
-                                            const data = await response.json();
-                                            setAiLesson(data.lesson);
-                                        } catch (e) {
-                                            setAiLesson('Failed to generate lesson. Please try again.');
-                                        } finally {
-                                            setIsGenerating(false);
-                                        }
-                                    }}
-                                    disabled={isGenerating}
-                                    className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase rounded-2xl shadow-lg transition-all"
-                                >
-                                    {isGenerating ? 'Generating...' : 'Get New Lesson'}
-                                </button>
-                                <div className="bg-slate-950 p-4 rounded-2xl text-slate-300 text-xs leading-relaxed min-h-[200px]">
-                                    {aiLesson ? <pre className="whitespace-pre-wrap font-sans">{aiLesson}</pre> : 'Click the button above to start your lesson.'}
+                            <div className="flex flex-col h-[400px]">
+                                <div className="flex-1 overflow-y-auto space-y-3 mb-3 pr-2">
+                                    {chatHistory.map((msg, i) => (
+                                        <div key={i} className={`p-3 rounded-2xl text-xs max-w-[85%] ${msg.role === 'user' ? 'bg-emerald-600 text-white ml-auto' : 'bg-slate-800 text-slate-200'}`}>
+                                            {msg.parts[0].text}
+                                        </div>
+                                    ))}
+                                    <div ref={chatEndRef} />
+                                </div>
+                                <div className="flex gap-2">
+                                    <input
+                                        value={input}
+                                        onChange={(e) => setInput(e.target.value)}
+                                        onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                                        placeholder="Ask a question..."
+                                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs text-white"
+                                    />
+                                    <button 
+                                        onClick={toggleListening}
+                                        className={`px-4 py-2 rounded-xl font-bold ${isListening ? 'bg-rose-600 animate-pulse' : 'bg-slate-700'} text-white`}
+                                    >
+                                        {isListening ? 'Stop' : '🎤'}
+                                    </button>
+                                    <button 
+                                        onClick={() => handleSendMessage()}
+                                        disabled={isGenerating || !input.trim()}
+                                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl disabled:opacity-50"
+                                    >
+                                        Send
+                                    </button>
                                 </div>
                             </div>
                         )}

@@ -25,18 +25,18 @@ async function startServer() {
   // API routes
   app.post("/api/italian-lesson", async (req, res) => {
     try {
-      const { prompt } = req.body;
+      const { messages } = req.body;
       const response = await ai.models.generateContent({
         model: "gemini-3.8-flash",
-        contents: prompt,
+        contents: messages,
         config: {
-          systemInstruction: "You are an expert Italian teacher. Provide lessons that are comprehensive, structured (grammar, vocab, practice), and encouraging. Explain nuances. Keep it structured and easy to follow.",
+          systemInstruction: "You are an expert Italian teacher for warehouse operators. Be conversational, encouraging, and structured. Explain grammar nuances clearly. When asked for a lesson, provide a comprehensive, structured lesson (grammar, vocab, practice). When interacting, keep it a back-and-forth chat.",
         },
       });
-      res.json({ lesson: response.text });
+      res.json({ reply: response.text });
     } catch (error) {
       console.error("Gemini Error:", error);
-      res.status(500).json({ error: "Failed to generate lesson" });
+      res.status(500).json({ error: "Failed to generate response" });
     }
   });
 
