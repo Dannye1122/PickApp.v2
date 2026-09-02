@@ -42,8 +42,8 @@ export const RotaCalendar: React.FC<RotaCalendarProps> = ({ userName, onClose })
         return shifts.find(s => {
             const loginDate = s.clockInTime 
                 ? getLocalDateString(new Date(s.clockInTime)) 
-                : s.date;
-            return loginDate === dateStr;
+                : (s.date ? s.date.split('T')[0] : '');
+            return loginDate === dateStr || s.date === dateStr;
         });
     };
 

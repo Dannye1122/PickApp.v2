@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion } from 'motion/react';
 import { 
-    Zap, Flame, Coffee, Trophy, Clock, FileText, Play, Square, Award, Download, CheckCircle, Camera, AlertCircle
+    Zap, Flame, Coffee, Trophy, Clock, FileText, Play, Square, Award, Download, CheckCircle, Camera, AlertCircle, Hash
 } from 'lucide-react';
 import { PickingDashboard } from './PickingDashboard';
 import { MetricCard } from './stats/MetricCard';
@@ -354,27 +354,77 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
                         ) : (
                             <div className="space-y-4">
                                 {shiftData.firstStartTime && (
-                                    <div className="flex items-center justify-between bg-slate-950 p-3 border border-slate-800 rounded-xl mb-4">
-                                        <div className="flex flex-col">
-                                            <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Active Pick Start</span>
-                                            <span className="text-white font-bold text-sm">
-                                                {new Date(shiftData.firstStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                            </span>
+                                    <div className="bg-slate-950 p-2.5 border border-slate-800 rounded-xl mb-3 space-y-2">
+                                        <div className="flex items-center justify-between px-1 border-b border-slate-800/60 pb-2">
+                                            <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider">
+                                                <Hash size={12} className="text-amber-400" />
+                                                <span>SHIFT CODE:</span>
+                                                <span className="text-amber-300 font-extrabold bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded text-[11px] tracking-widest select-all">
+                                                    {shiftData.shiftCode || 'N/A'}
+                                                </span>
+                                            </div>
+                                            <span className="text-[9px] text-emerald-400/80 font-bold uppercase tracking-wider bg-emerald-950/40 border border-emerald-800/40 px-1.5 py-0.5 rounded">VERIFIED</span>
                                         </div>
-                                        <button 
-                                            className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-bold text-slate-300 transition-colors"
-                                            onClick={() => {
-                                                const d = new Date(shiftData.firstStartTime!);
-                                                setManualClockTime(`${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`);
-                                                setManualClockType('pick_start');
-                                                haptic('light');
-                                                setShowClockInModal(true);
-                                            }}
-                                        >
-                                            Edit
-                                        </button>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            {/* Shift Time Card */}
+                                        <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800 flex flex-col justify-between">
+                                            <div className="flex items-center justify-between mb-1">
+                                                <span className="text-[10px] text-emerald-400 font-black uppercase tracking-wider">Shift Time</span>
+                                                <button 
+                                                    className="py-0.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-[10px] font-bold text-slate-300 transition-colors"
+                                                    onClick={() => {
+                                                        const d = new Date(shiftData.firstStartTime!);
+                                                        setManualClockTime(`${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`);
+                                                        setManualClockType('in');
+                                                        haptic('light');
+                                                        setShowClockInModal(true);
+                                                    }}
+                                                >
+                                                    Edit
+                                                </button>
+                                            </div>
+                                            <div className="text-white font-extrabold text-xs">
+                                                In: {new Date(shiftData.firstStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </div>
+                                            <div className="text-slate-400 font-medium text-[11px] mt-0.5">
+                                                Out: {shiftData.isShiftFinalized && shiftData.endTime 
+                                                    ? new Date(shiftData.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+                                                    : 'Active'}
+                                            </div>
+                                        </div>
+
+                                        {/* Pick Time Card */}
+                                        <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800 flex flex-col justify-between">
+                                            <div className="flex items-center justify-between mb-1">
+                                                <span className="text-[10px] text-sky-400 font-black uppercase tracking-wider">Pick Time</span>
+                                                <button 
+                                                    className="py-0.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-[10px] font-bold text-slate-300 transition-colors"
+                                                    onClick={() => {
+                                                        const pStart = shiftData.firstPickTime || shiftData.firstStartTime;
+                                                        const d = new Date(pStart!);
+                                                        setManualClockTime(`${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`);
+                                                        setManualClockType('pick_start');
+                                                        haptic('light');
+                                                        setShowClockInModal(true);
+                                                    }}
+                                                >
+                                                    Edit
+                                                </button>
+                                            </div>
+                                            <div className="text-white font-extrabold text-xs">
+                                                Start: {shiftData.firstPickTime 
+                                                    ? new Date(shiftData.firstPickTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+                                                    : new Date(shiftData.firstStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </div>
+                                            <div className="text-slate-400 font-medium text-[11px] mt-0.5">
+                                                End: {shiftData.pickPhaseEndTime 
+                                                    ? new Date(shiftData.pickPhaseEndTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+                                                    : 'In Progress'}
+                                            </div>
+                                        </div>
                                     </div>
-                                )}
+                                </div>
+                            )}
                                 <div className="grid grid-cols-4 gap-2">
                                     {[
                                         { id: 1, val: lane1, set: setLane1 },

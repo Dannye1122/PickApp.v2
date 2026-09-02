@@ -4,6 +4,7 @@ import { Preferences } from '../lib/capacitorMocks';
 import { migrateLocalStorageToIndexedDB, getLocalRota } from '../services/indexedDbService';
 import { APP_VERSION } from '../constants/version';
 import { getUserHomeDepartment } from '../constants/data';
+import { generateShiftCode } from '../lib/shiftCodeUtils';
 
 export const DASERGHIE_ROTA = {
     weeks: 6,
@@ -21,6 +22,7 @@ export const DASERGHIE_ROTA = {
 export const defaultShiftData = {
     totalCases: 0,
     firstStartTime: null,
+    firstPickTime: null,
     totalExcludedTime: 0,
     history: [],
     steps: 0,
@@ -191,6 +193,10 @@ export const processLoadedData = (parsed: any, defaultValues: any) => {
 
     parsed.voiceEnabled = false;
     
+    if (!parsed.shiftCode && (parsed.firstStartTime || parsed.isPicking || parsed.history?.length > 0)) {
+        parsed.shiftCode = generateShiftCode(parsed.operator, parsed.firstStartTime || Date.now());
+    }
+
     if (!parsed.isShiftFinalized && parsed.steps !== undefined && parsed.firstStartTime) {
         localStorage.setItem('shiftStepBackup', parsed.steps.toString());
     }
@@ -203,6 +209,13 @@ export function ShiftDataProvider({ children }: { children: ReactNode }) {
     const [shiftData, setShiftData] = useState<ShiftData>(() => {
         try {
             const lastUser = localStorage.getItem('lastUser');
+            const opKey = lastUser ? lastUser.toUpperCase().trim() : 'DEFAULT';
+            
+            // Check for immediate crash backup first
+            const crashBackupUser = localStorage.getItem(`ACTIVE_SHIFT_CRASH_BACKUP_${opKey}`);
+            const crashBackupGlobal = localStorage.getItem('ACTIVE_SHIFT_CRASH_BACKUP');
+            const rawCrash = crashBackupUser || crashBackupGlobal;
+
             const keys = Object.keys(localStorage);
             let candidateKey = lastUser ? `pickData_${lastUser}` : 'pickData';
             let rawData = localStorage.getItem(candidateKey);
@@ -215,14 +228,24 @@ export function ShiftDataProvider({ children }: { children: ReactNode }) {
                 }
             }
 
-            if (!rawData) return defaultShiftData as any;
+            let baseData = rawData;
+            if (rawCrash) {
+                try {
+                    const parsedCrash = JSON.parse(rawCrash);
+                    if (parsedCrash && parsedCrash.firstStartTime && !parsedCrash.isShiftFinalized) {
+                        baseData = rawCrash;
+                    }
+                } catch (e) {}
+            }
+
+            if (!baseData) return defaultShiftData as any;
             
             try {
-                const parsed = JSON.parse(rawData);
+                const parsed = JSON.parse(baseData);
                 return processLoadedData(parsed, defaultShiftData) as any;
             } catch (e) {
-                localStorage.setItem(`pickData_corrupted_${Date.now()}`, rawData);
-                localStorage.removeItem(candidateKey);
+                localStorage.setItem(`pickData_corrupted_${Date.now()}`, baseData);
+                if (candidateKey) localStorage.removeItem(candidateKey);
                 return defaultShiftData as any;
             }
         } catch (e) {

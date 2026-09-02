@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { 
-  Calendar, X, FileText, Sparkles, ChevronLeft, ChevronRight, RotateCcw, Trash2
+  Calendar, X, FileText, Sparkles, ChevronLeft, ChevronRight, RotateCcw, Trash2, Download
 } from 'lucide-react';
 import { ShiftSummary, ThemeColors, UserProfile } from '../../types';
 import { getLocalDateString, normalizeDateStr, saveUserProfile, deleteShiftSummary } from '../../services/leaderboardService';
 import { formatHHMM, hoursToHHMM } from '../../utils/formatUtils';
 import { isPickEntry } from '../../utils/statsUtils';
 import { auth } from '../../lib/firebase';
+import { generateFullShiftReport } from '../../services/shiftReportService';
+import { deviceExport } from '../../lib/deviceApi';
 
 const safeLocalStorage = {
   setItem: (key: string, value: string, _force?: boolean) => {
@@ -493,17 +495,19 @@ export const RotaModal: React.FC<RotaModalProps> = ({
               <div className="space-y-4">
                 <div className="flex justify-between items-center mb-1">
                   <div className="text-[10px] uppercase font-black tracking-widest text-slate-400">Last 6 Weeks of Picking Summaries</div>
-                  <button
-                    onClick={() => {
-                      haptic('medium');
-                      setRestoreText('');
-                      setRestoreStatus(null);
-                      setShowRestoreModal(true);
-                    }}
-                    className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-xl text-[10px] font-black tracking-wider uppercase transition-all flex items-center gap-1.5"
-                  >
-                    <RotateCcw size={12} /> Restore Shift
-                  </button>
+                  {isUserAdmin() && (
+                    <button
+                      onClick={() => {
+                        haptic('medium');
+                        setRestoreText('');
+                        setRestoreStatus(null);
+                        setShowRestoreModal(true);
+                      }}
+                      className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-xl text-[10px] font-black tracking-wider uppercase transition-all flex items-center gap-1.5"
+                    >
+                      <RotateCcw size={12} /> Restore Shift
+                    </button>
+                  )}
                 </div>
                 {mergedShiftSummaries.length === 0 ? (
                   <div className="text-center py-12 bg-slate-900/40 border border-slate-800/50 rounded-2xl text-slate-450 italic text-xs">
@@ -531,32 +535,6 @@ export const RotaModal: React.FC<RotaModalProps> = ({
                               <span>•</span>
                               <span>Out: {summary.clockOutTime ? new Date(summary.clockOutTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : (summary.clockInTime && summary.totalSeconds ? new Date(summary.clockInTime + summary.totalSeconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--:--')}</span>
                             </div>
-                          </div>
-                          <div className="flex gap-2 items-center">
-                            {(isUserAdmin() || (summary.userName || '').toUpperCase().trim() === (shiftData.operator || '').toUpperCase().trim()) && (
-                              <button
-                                onClick={async () => {
-                                  if(window.confirm("Are you sure you want to delete this shift summary?")) {
-                                    const targetUser = summary.userName || shiftData.operator;
-                                    const docId = summary.id || `${auth.currentUser?.uid || 'anon'}_${summary.clockInTime}`;
-                                    const success = await deleteShiftSummary(docId, targetUser, summary.clockInTime);
-                                    if (success) {
-                                      haptic('medium');
-                                      setShiftSummaries(prev => prev.filter(s => s.id !== summary.id && s.clockInTime !== summary.clockInTime));
-                                      fetchShiftSummaries(targetUser, true).then(fresh => {
-                                        setShiftSummaries(fresh);
-                                      });
-                                    } else {
-                                      haptic('heavy');
-                                      alert("Failed to delete shift record. If you are not the owner or an admin, you cannot delete this record.");
-                                    }
-                                  }
-                                }}
-                                className="p-1 rounded-md bg-red-500/10 hover:bg-red-500/20 text-red-500 transition-colors"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            )}
                           </div>
                         </div>
                         
@@ -624,12 +602,27 @@ export const RotaModal: React.FC<RotaModalProps> = ({
                           )
                         })()}
                         
-                        <button
-                          onClick={() => { haptic('medium'); setViewingPastSummary(summary); }}
-                          className="w-full mt-1.5 py-2.5 bg-slate-800 hover:bg-slate-750 text-sky-400 hover:text-sky-300 text-xs font-black tracking-widest rounded-xl border border-slate-800 transition-all flex items-center justify-center gap-1.5 uppercase font-mono"
-                        >
-                          <FileText size={13} /> View Full Shift Summary
-                        </button>
+                        <div className="flex gap-2 mt-2 pt-2 border-t border-slate-800/80">
+                          <button
+                            onClick={() => { haptic('medium'); setViewingPastSummary(summary); }}
+                            className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-sky-400 hover:text-sky-300 text-[11px] font-black tracking-wider rounded-xl border border-slate-700/60 transition-all flex items-center justify-center gap-1.5 uppercase font-mono"
+                          >
+                            <FileText size={13} /> View Detail
+                          </button>
+                          <button
+                            onClick={async () => {
+                              haptic('medium');
+                              const csvContent = generateFullShiftReport(summary);
+                              const dateStr = (summary.date || 'shift').replace(/-/g, '');
+                              const opName = (summary.userName || shiftData.operator || 'OPERATOR').toUpperCase().trim();
+                              const fileName = `ShiftReport_${opName}_${dateStr}.csv`;
+                              await deviceExport(csvContent, fileName, true);
+                            }}
+                            className="flex-1 py-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[11px] font-black tracking-wider rounded-xl border border-emerald-500/20 transition-all flex items-center justify-center gap-1.5 uppercase font-mono"
+                          >
+                            <Download size={13} /> Download Report
+                          </button>
+                        </div>
                       </div>
                     );
                   })

@@ -64,6 +64,12 @@ export const ShiftSummaryModal: React.FC<ShiftSummaryModalProps> = ({
                 <p className="text-slate-400 mb-6 text-sm">{getSummaryMessage()}</p>
                 
                 <div className="bg-slate-950 rounded-2xl p-4 mb-6 border border-slate-800/50 space-y-3">
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
+                        <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Shift Code</span>
+                        <span className="text-amber-400 font-mono font-bold text-xs bg-amber-950/60 border border-amber-800/50 px-2 py-0.5 rounded tracking-wider select-all">
+                            {shiftData.shiftCode || 'N/A'}
+                        </span>
+                    </div>
                     <div className="flex justify-between items-center">
                         <span className="text-slate-400 text-sm font-medium">Total Cases</span>
                         <span className="text-white font-bold text-lg">{isShiftFinalized ? finalizedStats?.cases : shiftData.totalCases}</span>
@@ -87,38 +93,6 @@ export const ShiftSummaryModal: React.FC<ShiftSummaryModalProps> = ({
                         <span className="text-slate-400 text-sm font-medium">Shift Time</span>
                         <span className="text-white font-bold text-lg">{formatHHMM(isShiftFinalized ? (finalizedStats?.activeElapsedSeconds || 0) : activeElapsedSeconds)}</span>
                     </div>
-                    {isAisles && (
-                        <div className="border border-sky-500/10 bg-sky-950/20 rounded-2xl p-3.5 space-y-2.5">
-                            <div className="flex justify-between items-center border-b border-sky-500/10 pb-2">
-                                <span className="text-sky-400 text-sm font-bold uppercase tracking-tighter flex items-center gap-1.5 font-bold">
-                                    <Sparkles size={11} className="text-sky-400" />
-                                    PWA Exemption
-                                </span>
-                                <span className="text-sky-400 font-extrabold text-lg">+{formatTime(isShiftFinalized ? (finalizedStats?.exemption || 0) : finalExemption)}</span>
-                            </div>
-                            
-                            <div className="space-y-1.5 text-slate-400 text-[10px] font-mono leading-relaxed select-none">
-                                <div className="flex justify-between">
-                                    <span>Post-dinner (Max 10m):</span>
-                                    <span className="text-slate-200 font-bold">
-                                        +{formatTime(isShiftFinalized ? calculateAislesExemptionDetail(finalizedStats?.totalSeconds || 0).postDinner : accruedPostDinner)}
-                                    </span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span>Dinner (Max 30m):</span>
-                                    <span className="text-slate-200 font-bold">
-                                        +{formatTime(isShiftFinalized ? calculateAislesExemptionDetail(finalizedStats?.totalSeconds || 0).dinner : accruedDinner)}
-                                    </span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span>Clock-out (Max 5m):</span>
-                                    <span className="text-slate-200 font-bold">
-                                        +{formatTime(isShiftFinalized ? calculateAislesExemptionDetail(finalizedStats?.totalSeconds || 0).clockOut : accruedClockOut)}
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
-                    )}
                     <div className="flex justify-between items-center border-t border-slate-800/50 pt-2">
                         <span className="text-slate-400 text-sm font-medium">Break / Idle Duration</span>
                         <div className="text-right">

@@ -135,15 +135,57 @@ export const markDataFetched = (cacheKey: string) => {
     }
 };
 
+// Fast in-memory RAM cache to ensure zero-latency reads and zero quota errors
+const memoryCache = new Map<string, { timestamp: number; data: any }>();
+
+/**
+ * Strips heavy properties (e.g. large history arrays, raw images, label photo blobs)
+ * to produce a lightweight storage payload for localStorage.
+ */
+const stripHeavyFields = (val: any): any => {
+    if (!val) return val;
+    if (Array.isArray(val)) {
+        return val.map(item => stripHeavyFields(item));
+    }
+    if (typeof val === 'object') {
+        const copy: any = {};
+        for (const k of Object.keys(val)) {
+            if (k === 'rawPhotoBlobs' || k === 'labelPhotos' || k === 'rawImages') {
+                continue;
+            }
+            if (k === 'history' && Array.isArray(val[k]) && val[k].length > 10) {
+                // Keep only the last 5 entries for local storage cache, full history is in IndexedDB
+                copy[k] = val[k].slice(-5);
+                copy['historyCount'] = val[k].length;
+                continue;
+            }
+            copy[k] = val[k];
+        }
+        return copy;
+    }
+    return val;
+};
+
 /**
  * Retrieves cached data for a given key.
+ * Uses in-memory cache first, falling back to localStorage.
  */
 export const getCachedData = <T>(cacheKey: string): T | null => {
+    // 1. Check in-memory RAM cache first
+    const memEntry = memoryCache.get(cacheKey);
+    if (memEntry) {
+        return memEntry.data as T;
+    }
+
+    // 2. Fallback to localStorage
     try {
         const cached = localStorage.getItem(`cache_${cacheKey}`);
         if (cached) {
             const parsed = JSON.parse(cached);
-            return parsed.data as T;
+            if (parsed && parsed.data !== undefined) {
+                memoryCache.set(cacheKey, { timestamp: parsed.timestamp || Date.now(), data: parsed.data });
+                return parsed.data as T;
+            }
         }
     } catch (e) {
         console.warn(`Failed to retrieve cached data for ${cacheKey}:`, e);
@@ -153,42 +195,62 @@ export const getCachedData = <T>(cacheKey: string): T | null => {
 
 /**
  * Saves data to cache and updates the fetch timestamp.
+ * Resilient against localStorage quota limits with memory cache fallback.
  */
 export const setCachedData = (cacheKey: string, data: any) => {
     const key = `cache_${cacheKey}`;
-    const serialized = JSON.stringify({ timestamp: Date.now(), data });
-    
+    const timestamp = Date.now();
+
+    // Always store full un-truncated data in RAM memory cache first
+    memoryCache.set(cacheKey, { timestamp, data });
+
+    // Mark fetch timestamp so backend is protected
+    markDataFetched(cacheKey);
+
+    // Save lightweight version to localStorage to prevent QuotaExceededError
     try {
+        const storageData = stripHeavyFields(data);
+        const serialized = JSON.stringify({ timestamp, data: storageData });
         localStorage.setItem(key, serialized);
-        markDataFetched(cacheKey);
     } catch (e: any) {
-        console.warn(`QuotaExceededError when setting cache for key: ${key}. Attempting cache eviction...`, e);
+        console.warn(`QuotaExceededError when setting cache for key: ${key}. Evicting old keys...`);
         try {
-            // Find all cache keys to remove to free up space
+            // Find non-critical cache keys to remove
             const keysToRemove: string[] = [];
             for (let i = 0; i < localStorage.length; i++) {
                 const k = localStorage.key(i);
-                if (k && k.startsWith('cache_') && k !== key) {
+                if (!k) continue;
+                if (k.startsWith('cache_') && k !== key) {
+                    keysToRemove.push(k);
+                } else if (k.startsWith('pickData_corrupted_') || k.startsWith('draft_')) {
                     keysToRemove.push(k);
                 }
             }
             
-            // Remove older caches to clear space
             for (const k of keysToRemove) {
                 localStorage.removeItem(k);
-                const baseKey = k.replace(/^cache_/, '');
-                localStorage.removeItem(`last_fetch_${baseKey}`);
+                if (k.startsWith('cache_')) {
+                    const baseKey = k.replace(/^cache_/, '');
+                    localStorage.removeItem(`last_fetch_${baseKey}`);
+                }
             }
             
-            // Try saving again
-            localStorage.setItem(key, serialized);
-            markDataFetched(cacheKey);
-            console.log(`Cache eviction succeeded. Saved ${key}.`);
+            // Re-attempt saving ultra-slim version
+            const ultraSlim = Array.isArray(data)
+                ? data.map(item => {
+                    if (item && typeof item === 'object') {
+                        const { history, rawPhotoBlobs, labelPhotos, rawImages, ...rest } = item;
+                        return rest;
+                    }
+                    return item;
+                })
+                : stripHeavyFields(data);
+
+            const slimSerialized = JSON.stringify({ timestamp, data: ultraSlim });
+            localStorage.setItem(key, slimSerialized);
         } catch (retryError) {
-            console.error(`Failed to cache data even after evicting other cache entries:`, retryError);
-            // Fallback: Proceed gracefully without local cache storage.
-            // Still mark the request as fetched to respect the rate limiting of backend queries.
-            markDataFetched(cacheKey);
+            // Graceful non-blocking fallback: memoryCache and IndexedDB already hold data
+            console.warn(`LocalStorage quota full for ${key}. Operating safely with memory cache and IndexedDB.`);
         }
     }
 };

@@ -17,29 +17,14 @@ export interface AislesExemptionDetail {
 }
 
 export const calculateAislesExemptionDetail = (totalSeconds: number, rules?: WarehouseSettings['exemptionRules']): AislesExemptionDetail => {
-    const validTotal = (typeof totalSeconds === 'number' && !isNaN(totalSeconds) && isFinite(totalSeconds)) ? Math.max(0, totalSeconds) : 0;
-    
-    const r = rules || {
-        clockOutLimitSeconds: 300,
-        clockOutAccrualWindowSeconds: 21600,
-        dinnerLimitSeconds: 1800,
-        dinnerAccrualWindowSeconds: 21600,
-        postDinnerLimitSeconds: 600,
-        postDinnerAccrualWindowSeconds: 1800
-    };
-
-    const clockOut = Math.min(validTotal * (r.clockOutLimitSeconds / r.clockOutAccrualWindowSeconds), r.clockOutLimitSeconds);
-    const dinner = Math.min(validTotal * (r.dinnerLimitSeconds / r.dinnerAccrualWindowSeconds), r.dinnerLimitSeconds);
-    const postDinner = Math.min(validTotal * (r.postDinnerLimitSeconds / r.postDinnerAccrualWindowSeconds), r.postDinnerLimitSeconds);
-    
     return {
-        clockOut: Math.floor(clockOut) || 0,
-        dinner: Math.floor(dinner) || 0,
-        postDinner: Math.floor(postDinner) || 0,
-        total: Math.floor(clockOut + dinner + postDinner) || 0
+        clockOut: 0,
+        dinner: 0,
+        postDinner: 0,
+        total: 0
     };
 };
 
 export const calculateAislesExemption = (totalSeconds: number, rules?: WarehouseSettings['exemptionRules']): number => {
-    return calculateAislesExemptionDetail(totalSeconds, rules).total;
+    return 0;
 };

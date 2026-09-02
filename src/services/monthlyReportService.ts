@@ -448,24 +448,34 @@ export const checkMonthlyReportNotification = (): { isReady: boolean; monthName:
     const now = new Date();
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
+    const todayDate = now.getDate();
 
     const monthNames = [
         'January', 'February', 'March', 'April', 'May', 'June',
         'July', 'August', 'September', 'October', 'November', 'December'
     ];
 
-    // Current report key (e.g. "report_2026_7" for August)
+    // Calculate the last day of the current month in progress (e.g. 28, 29, 30, 31)
+    const lastDayOfCurrentMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+
+    const monthName = `${monthNames[currentMonth]} ${currentYear}`;
     const reportKey = `report_${currentYear}_${currentMonth}`;
+
+    // Notification must ONLY trigger on the last day of the month in progress
+    if (todayDate !== lastDayOfCurrentMonth) {
+        return { isReady: false, monthName, reportKey };
+    }
+
     const dismissedKey = localStorage.getItem(LAST_DISMISSED_REPORT_KEY);
 
     // If already dismissed for this cycle
     if (dismissedKey === reportKey) {
-        return { isReady: false, monthName: monthNames[currentMonth], reportKey };
+        return { isReady: false, monthName, reportKey };
     }
 
     return {
         isReady: true,
-        monthName: `${monthNames[currentMonth]} ${currentYear}`,
+        monthName,
         reportKey
     };
 };

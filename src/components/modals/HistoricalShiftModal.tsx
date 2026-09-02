@@ -1,10 +1,11 @@
 import React from 'react';
-import { Sparkles, Clock, LogOut, Activity, Coffee, Edit2, Check, X, Camera, Trash2, Share2 } from 'lucide-react';
+import { Sparkles, Clock, LogOut, Activity, Coffee, Edit2, Check, X, Camera, Download } from 'lucide-react';
 import { formatHHMM, formatTime } from '../../utils/formatUtils';
 import { getDepartmentBreakdown, isBreakEntry, isNoteEntry, isPickEntry } from '../../utils/statsUtils';
 import { haptic } from '../../services/hapticService';
-import { deleteShiftSummary, fetchShiftSummaries, saveShiftSummary } from '../../services/leaderboardService';
-import { copyFullShiftReport } from '../../services/shiftReportService';
+import { fetchShiftSummaries, saveShiftSummary } from '../../services/leaderboardService';
+import { generateFullShiftReport } from '../../services/shiftReportService';
+import { deviceExport } from '../../lib/deviceApi';
 import { auth } from '../../lib/firebase';
 
 interface HistoricalShiftModalProps {
@@ -456,49 +457,23 @@ export const HistoricalShiftModal: React.FC<HistoricalShiftModalProps> = ({
                     })()}
                 </div>
                 
-                <div className="p-4 border-t border-slate-800 shrink-0 select-none flex gap-2">
-                    {(isUserAdmin() || (viewingPastSummary.userName || '').toUpperCase().trim() === (shiftData.operator || '').toUpperCase().trim()) && (
-                        <button
-                            onClick={async () => {
-                                if (window.confirm("Are you sure you want to delete this shift summary?")) {
-                                    const targetUser = viewingPastSummary.userName || shiftData.operator;
-                                    const docId = viewingPastSummary.id || `${auth.currentUser?.uid || 'anon'}_${viewingPastSummary.clockInTime}`;
-                                    const success = await deleteShiftSummary(docId, targetUser, viewingPastSummary.clockInTime);
-                                    if (success) {
-                                        haptic('medium');
-                                        setShiftSummaries(prev => prev.filter(s => s.id !== viewingPastSummary.id && s.clockInTime !== viewingPastSummary.clockInTime));
-                                        setViewingPastSummary(null);
-                                        fetchShiftSummaries(targetUser, true).then(fresh => {
-                                            setShiftSummaries(fresh);
-                                        });
-                                    } else {
-                                        haptic('heavy');
-                                        alert("Failed to delete shift record.");
-                                    }
-                                }
-                            }}
-                            className="px-4 py-4 bg-red-500/10 hover:bg-red-500/20 active:scale-[0.98] text-xs text-red-400 font-bold tracking-wider rounded-2xl border border-red-500/20 transition-all flex items-center gap-1.5 shrink-0"
-                        >
-                            <Trash2 size={16} /> Delete
-                        </button>
-                    )}
+                <div className="p-4 border-t border-slate-800 shrink-0 select-none flex gap-3">
                     <button
                         onClick={async () => {
                             haptic('medium');
-                            const copied = await copyFullShiftReport(viewingPastSummary);
-                            if (copied) {
-                                alert("Full Shift Report & Restore Payload copied to clipboard!");
-                            } else {
-                                alert("Failed to copy report.");
-                            }
+                            const csvContent = generateFullShiftReport(viewingPastSummary);
+                            const dateStr = (viewingPastSummary.date || '27.08.2026').replace(/-/g, '');
+                            const operatorName = (viewingPastSummary.userName || viewingPastSummary.operator || 'MIABRUDAN').toUpperCase().trim();
+                            const fileName = `ShiftReport_${operatorName}_${dateStr}.csv`;
+                            await deviceExport(csvContent, fileName, true);
                         }}
-                        className="px-4 py-4 bg-sky-500/10 hover:bg-sky-500/20 active:scale-[0.98] text-xs text-sky-400 font-bold tracking-wider rounded-2xl border border-sky-500/20 transition-all flex items-center gap-1.5 shrink-0"
+                        className="flex-1 py-4 bg-emerald-500/10 hover:bg-emerald-500/20 active:scale-[0.98] text-xs text-emerald-400 font-bold tracking-wider rounded-2xl border border-emerald-500/20 transition-all flex items-center justify-center gap-2 uppercase font-mono"
                     >
-                        <Share2 size={16} /> Copy Full Report
+                        <Download size={16} /> Download CSV
                     </button>
                     <button 
                         onClick={onClose}
-                        className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 active:scale-[0.98] text-xs text-white uppercase font-black tracking-widest rounded-2xl border border-slate-700 transition-all text-center"
+                        className="px-6 py-4 bg-slate-800 hover:bg-slate-700 active:scale-[0.98] text-xs text-white uppercase font-black tracking-widest rounded-2xl border border-slate-700 transition-all text-center"
                     >
                         Close
                     </button>

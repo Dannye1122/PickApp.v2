@@ -14,5 +14,7 @@ export * from './LeaderboardModal';
 export * from './RotaModal';
 export * from './SettingsModal';
 export * from './HistoryLeaderboardOverlays';
+export * from './AppModalsContainer';
+export * from './BreakPolicyModal';
 
 

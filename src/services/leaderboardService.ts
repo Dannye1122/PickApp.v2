@@ -5,6 +5,7 @@ import {
   where,
   orderBy,
   limit,
+  startAfter,
   addDoc,
   serverTimestamp,
   doc,
@@ -610,6 +611,10 @@ export const saveShiftSummary = async (summary: Omit<ShiftSummary, 'timestamp' |
     // Direct setDoc write to Firestore for instant cloud persistence
     try {
       await setDoc(summaryDocRef, summaryData, { merge: true });
+      // Write to deterministic doc ID (OPERATOR_YYYY-MM-DD) for zero-quota direct single-doc queries
+      const deterministicDocId = `${safeName}_${loginDate}`;
+      const deterministicRef = doc(summaryRef, deterministicDocId);
+      await setDoc(deterministicRef, summaryData, { merge: true });
     } catch (directError) {
       console.warn("Direct Firestore setDoc in saveShiftSummary failed, syncManager backup will handle retry:", directError);
     }
@@ -1516,6 +1521,83 @@ export const getBetaFeedbackLogs = async (force: boolean = false) => {
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'beta_feedback_logs');
     return getCachedData<any[]>(cacheKey) || [];
+  }
+};
+
+export interface PaginatedShiftSummariesResult {
+  summaries: ShiftSummary[];
+  lastDoc: any;
+  hasMore: boolean;
+}
+
+export const fetchShiftSummariesPage = async (
+  pageSize: number = 50,
+  startAfterDoc?: any,
+  userName?: string
+): Promise<PaginatedShiftSummariesResult> => {
+  try {
+    const summariesRef = collection(db, 'shift_summaries');
+    let q;
+    
+    if (userName && userName.toUpperCase().trim() !== 'ADMIN') {
+      const safeName = userName.toUpperCase().trim();
+      if (startAfterDoc) {
+        q = query(
+          summariesRef,
+          where('userName', '==', safeName),
+          startAfter(startAfterDoc),
+          limit(pageSize)
+        );
+      } else {
+        q = query(
+          summariesRef,
+          where('userName', '==', safeName),
+          limit(pageSize)
+        );
+      }
+    } else {
+      if (startAfterDoc) {
+        q = query(
+          summariesRef,
+          startAfter(startAfterDoc),
+          limit(pageSize)
+        );
+      } else {
+        q = query(
+          summariesRef,
+          limit(pageSize)
+        );
+      }
+    }
+
+    const snapshot = await getDocs(q);
+    const lastVisible = snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null;
+    const hasMore = snapshot.docs.length === pageSize;
+
+    const summaries: ShiftSummary[] = snapshot.docs.map(doc => {
+      const data = doc.data() as any;
+      delete data.screenshot;
+      delete data.labelImage;
+      delete data.labelImages;
+
+      const clockInTime = data.clockInTime || (data.date ? new Date(data.date.includes('T') ? data.date : `${data.date}T06:00:00`).getTime() : (data.timestamp?.seconds ? data.timestamp.seconds * 1000 : undefined));
+      const clockOutTime = data.clockOutTime || (clockInTime && (data.totalSeconds || data.activeSeconds) ? clockInTime + Math.round((data.totalSeconds || data.activeSeconds || 0) * 1000) : undefined);
+
+      return { id: doc.id, ...data, clockInTime, clockOutTime } as ShiftSummary;
+    });
+
+    return {
+      summaries,
+      lastDoc: lastVisible,
+      hasMore
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'shift_summaries');
+    return {
+      summaries: [],
+      lastDoc: null,
+      hasMore: false
+    };
   }
 };
 

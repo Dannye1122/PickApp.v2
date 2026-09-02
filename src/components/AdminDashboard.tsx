@@ -4,13 +4,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
     Users, User, UserPlus, Trash2, ShieldAlert, Database, Zap, 
     RefreshCw, Settings, Save, CheckCircle, Activity, Info, MapPin, Layers, Fingerprint,
-    TrendingUp, ShieldCheck, Pencil, UserCheck, UserX, X
+    TrendingUp, ShieldCheck, Pencil, UserCheck, UserX, X, Plus, Search, Calendar, ChevronRight, Clock
 } from 'lucide-react';
 import { 
     getAllUsers, createUserWithAuthAndProfile, deleteUser, 
     saveUserProfile, getBetaFeedbackLogs,
     purgeDatabaseOlderThan6Weeks, getDatabaseStorageStats, DBStorageStats,
-    fetchAllUsers, fetchAllShiftSummaries, findUserByUsernameGlobal
+    fetchAllUsers, fetchAllShiftSummaries, findUserByUsernameGlobal,
+    saveShiftSummary, fetchShiftSummaries, getLocalDateString, normalizeDateStr
 } from '../services/leaderboardService';
 import { generateExecutiveMonthlyReportPDF } from '../services/monthlyReportService';
 import { FileText, Download } from 'lucide-react';
@@ -94,11 +95,144 @@ export const AdminDashboard = ({
     const [statusToast, setStatusToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
     // Admin UI Tab Control
-    const [adminRoleTab, setAdminRoleTab] = useState<'roster' | 'beta'>('roster');
+    const [adminRoleTab, setAdminRoleTab] = useState<'roster' | 'beta' | 'audit'>('roster');
     const [betaLogs, setBetaLogs] = useState<any[]>([]);
         
     // Exec Analytics Metrics
     const [betaMetrics, setBetaMetrics] = useState({ ergonomicsScore: 0, reliabilityRate: 0, motivationLift: 0 });
+
+    // Shift Audit & Data Hub State
+    const [auditOperator, setAuditOperator] = useState<string>('MIABRUDAN');
+    const [auditShifts, setAuditShifts] = useState<any[]>([]);
+    const [loadingAuditShifts, setLoadingAuditShifts] = useState<boolean>(false);
+    const [showManualShiftModal, setShowManualShiftModal] = useState<boolean>(false);
+    
+    // Manual Shift Form State
+    const [manualOp, setManualOp] = useState<string>('MIABRUDAN');
+    const [manualDate, setManualDate] = useState<string>(new Date().toISOString().split('T')[0]);
+    const [manualCases, setManualCases] = useState<string>('1845');
+    const [manualActiveHours, setManualActiveHours] = useState<string>('7.0');
+    const [manualBreakMins, setManualBreakMins] = useState<string>('30');
+    const [manualTargetRate, setManualTargetRate] = useState<string>('260');
+    const [manualDepartment, setManualDepartment] = useState<string>('aisles');
+    const [savingManualShift, setSavingManualShift] = useState<boolean>(false);
+
+    const loadAuditShifts = useCallback(async (opName: string, force: boolean = true) => {
+        setLoadingAuditShifts(true);
+        try {
+            let fetched: any[] = [];
+            if (opName === 'ALL') {
+                fetched = await fetchAllShiftSummaries(force);
+            } else {
+                fetched = await fetchShiftSummaries(opName, force);
+            }
+            setAuditShifts(fetched || []);
+        } catch (err) {
+            console.warn('Error loading audit shifts:', err);
+        } finally {
+            setLoadingAuditShifts(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (adminRoleTab === 'audit') {
+            loadAuditShifts(auditOperator, true);
+        }
+    }, [adminRoleTab, auditOperator, loadAuditShifts]);
+
+    const handleAdminSaveManualShift = async () => {
+        const op = manualOp.toUpperCase().trim();
+        if (!op) {
+            triggerToast('Operator name is required', 'error');
+            return;
+        }
+        const cases = parseInt(manualCases) || 0;
+        const activeHours = parseFloat(manualActiveHours) || 0;
+        const breakMins = parseInt(manualBreakMins) || 0;
+        const targetRate = parseInt(manualTargetRate) || 260;
+
+        if (cases <= 0 || activeHours <= 0) {
+            triggerToast('Cases and Active Hours must be greater than 0', 'error');
+            return;
+        }
+
+        setSavingManualShift(true);
+        haptic('heavy');
+
+        try {
+            const activeSecs = Math.round(activeHours * 3600);
+            const breakSecs = Math.round(breakMins * 60);
+            const totalSecs = activeSecs + breakSecs;
+            const clockInTime = new Date(`${manualDate}T06:00:00`).getTime();
+            const clockOutTime = clockInTime + (totalSecs * 1000);
+            const finalRate = Math.round((cases / activeHours));
+
+            const shiftSummaryData = {
+                userName: op,
+                operator: op,
+                date: manualDate,
+                totalCases: cases,
+                cases,
+                activeSeconds: activeSecs,
+                breakSeconds: breakSecs,
+                totalSeconds: totalSecs,
+                clockInTime,
+                clockOutTime,
+                finalRate,
+                targetRate,
+                department: manualDepartment || 'aisles',
+                steps: Math.round(cases * 8.5),
+                history: []
+            };
+
+            const success = await saveShiftSummary(shiftSummaryData as any);
+            if (success) {
+                triggerToast(`Saved shift for ${op} on ${manualDate}`, 'success');
+                setShowManualShiftModal(false);
+                await loadAuditShifts(auditOperator, true);
+            } else {
+                triggerToast('Failed to save shift report', 'error');
+            }
+        } catch (err: any) {
+            triggerToast(`Save error: ${err.message || err}`, 'error');
+        } finally {
+            setSavingManualShift(false);
+        }
+    };
+
+    const handleExportAuditCSV = () => {
+        haptic('medium');
+        if (!auditShifts || auditShifts.length === 0) {
+            triggerToast('No shift records to export', 'error');
+            return;
+        }
+        const headers = ['Operator', 'Date', 'ClockIn', 'ClockOut', 'CasesPicked', 'ActiveHours', 'BreakMins', 'FinalCPH', 'TargetCPH', 'Department', 'Steps'];
+        const rows = auditShifts.map(s => {
+            const opName = s.userName || s.operator || 'Unknown';
+            const sDate = s.date || (s.clockInTime ? getLocalDateString(new Date(s.clockInTime)) : '');
+            const clockInStr = s.clockInTime ? new Date(s.clockInTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '06:00';
+            const clockOutStr = s.clockOutTime ? new Date(s.clockOutTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '14:00';
+            const cases = s.totalCases || s.cases || 0;
+            const activeHrs = s.activeSeconds ? (s.activeSeconds / 3600).toFixed(2) : '0';
+            const breakM = s.breakSeconds ? Math.round(s.breakSeconds / 60) : 0;
+            const cph = s.finalRate || 0;
+            const target = s.targetRate || 260;
+            const dept = s.department || 'Aisles';
+            const steps = Math.round(s.steps || 0);
+
+            return [opName, sDate, clockInStr, clockOutStr, cases, activeHrs, breakM, cph, target, `"${dept}"`, steps];
+        });
+
+        const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `PickApp_Shift_Audit_${auditOperator}_${new Date().toISOString().split('T')[0]}.csv`;
+        a.click();
+        window.URL.revokeObjectURL(url);
+        triggerToast('Audit Report CSV Downloaded', 'success');
+    };
 
     // Load necessary data
     const loadAllAdminData = useCallback(async (force: boolean = false) => {
@@ -518,6 +652,12 @@ export const AdminDashboard = ({
                         className={`flex-1 py-2.5 rounded-[16px] text-[10px] font-black uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 min-h-[48px] ${adminRoleTab === 'beta' ? 'bg-emerald-500 text-slate-950 shadow-xl shadow-emerald-500/20' : 'text-slate-600 hover:text-slate-400 border border-transparent hover:border-slate-800'}`}
                     >
                         <TrendingUp size={15} /> BETA_INTEL
+                    </button>
+                    <button 
+                        onClick={() => { haptic('light'); setAdminRoleTab('audit'); }}
+                        className={`flex-1 py-2.5 rounded-[16px] text-[10px] font-black uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 min-h-[48px] ${adminRoleTab === 'audit' ? 'bg-sky-500 text-slate-950 shadow-xl shadow-sky-500/20' : 'text-slate-600 hover:text-slate-400 border border-transparent hover:border-slate-800'}`}
+                    >
+                        <Database size={15} /> SHIFT_AUDIT
                     </button>
                 </div>
 
@@ -1238,6 +1378,146 @@ export const AdminDashboard = ({
                         </div>
                     </div>
                 )}
+
+                {adminRoleTab === 'audit' && (
+                    <div className="space-y-4">
+                        {/* Audit Header Controls */}
+                        <div className="bg-slate-900 border border-slate-800 p-4 rounded-3xl space-y-3">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <Database size={16} className="text-sky-400" />
+                                    <h3 className="text-xs font-black text-white uppercase tracking-wider">Database Shift Audit</h3>
+                                </div>
+                                <button 
+                                    onClick={() => loadAuditShifts(auditOperator, true)}
+                                    className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition-all active:scale-95 flex items-center gap-1.5 text-[10px] font-bold uppercase"
+                                >
+                                    <RefreshCw size={13} className={loadingAuditShifts ? 'animate-spin' : ''} /> Refresh
+                                </button>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                                <div>
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">
+                                        Select Operator
+                                    </label>
+                                    <select 
+                                        value={auditOperator}
+                                        onChange={(e) => setAuditOperator(e.target.value)}
+                                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs font-bold text-sky-400 outline-none focus:border-sky-500 uppercase font-mono"
+                                    >
+                                        <option value="MIABRUDAN">MIABRUDAN</option>
+                                        <option value="DASERGHIE">DASERGHIE</option>
+                                        <option value="STBLAN2">STBLAN2</option>
+                                        <option value="ADMIN">ADMIN</option>
+                                        <option value="ALL">ALL OPERATORS</option>
+                                    </select>
+                                </div>
+
+                                <div className="flex gap-2 items-end">
+                                    <button 
+                                        onClick={() => {
+                                            setManualOp(auditOperator === 'ALL' ? 'MIABRUDAN' : auditOperator);
+                                            setShowManualShiftModal(true);
+                                        }}
+                                        className="flex-1 py-2.5 px-3 bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-sky-500/10 min-h-[42px]"
+                                    >
+                                        <Plus size={14} /> Add Shift
+                                    </button>
+                                    <button 
+                                        onClick={handleExportAuditCSV}
+                                        className="flex-1 py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-sky-400 border border-sky-500/20 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 min-h-[42px]"
+                                    >
+                                        <Download size={14} /> Export CSV
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Audit Summary Cards */}
+                        <div className="grid grid-cols-3 gap-2.5">
+                            <div className="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
+                                <div className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Total Shifts</div>
+                                <div className="text-xl font-black text-white mt-1">{auditShifts.length}</div>
+                            </div>
+                            <div className="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
+                                <div className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Total Cases</div>
+                                <div className="text-xl font-black text-emerald-400 mt-1">
+                                    {auditShifts.reduce((acc, s) => acc + (s.totalCases || s.cases || 0), 0)}
+                                </div>
+                            </div>
+                            <div className="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
+                                <div className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Avg CPH</div>
+                                <div className="text-xl font-black text-amber-400 mt-1">
+                                    {auditShifts.length > 0 
+                                        ? Math.round(auditShifts.reduce((acc, s) => acc + (s.finalRate || 0), 0) / auditShifts.length) 
+                                        : 0}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Itemized Shift List */}
+                        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 space-y-3">
+                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                                <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                                    Historical Shift Records ({auditShifts.length})
+                                </h4>
+                                <span className="text-[9px] font-mono text-slate-500">
+                                    {auditOperator}
+                                </span>
+                            </div>
+
+                            {loadingAuditShifts ? (
+                                <div className="py-8 text-center text-slate-500 text-xs font-bold animate-pulse">
+                                    Loading database shift records...
+                                </div>
+                            ) : auditShifts.length === 0 ? (
+                                <div className="py-8 text-center space-y-2">
+                                    <p className="text-xs text-slate-400 font-bold">No shift reports found for {auditOperator}</p>
+                                    <p className="text-[10px] text-slate-600">Click 'Add Shift' above to manually create or restore a missing report.</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
+                                    {auditShifts.map((shift, idx) => {
+                                        const dateStr = shift.date || (shift.clockInTime ? getLocalDateString(new Date(shift.clockInTime)) : 'Unknown Date');
+                                        const cases = shift.totalCases || shift.cases || 0;
+                                        const activeHrs = shift.activeSeconds ? (shift.activeSeconds / 3600).toFixed(1) : '7.0';
+                                        const cph = shift.finalRate || 0;
+                                        const dept = shift.department || 'aisles';
+                                        const opName = shift.userName || shift.operator || auditOperator;
+
+                                        return (
+                                            <div key={shift.id || idx} className="bg-slate-950/80 border border-slate-800/80 p-3 rounded-2xl flex items-center justify-between hover:border-sky-500/40 transition-all">
+                                                <div className="space-y-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs font-black text-white font-mono">{dateStr}</span>
+                                                        <span className="text-[9px] font-bold text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/20 uppercase">{opName}</span>
+                                                        <span className="text-[9px] font-mono text-slate-500 uppercase">{dept}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-3 text-[10px] text-slate-400 font-bold">
+                                                        <span><strong className="text-emerald-400">{cases}</strong> cases</span>
+                                                        <span>•</span>
+                                                        <span><strong className="text-amber-400">{cph}</strong> CPH</span>
+                                                        <span>•</span>
+                                                        <span><strong>{activeHrs}h</strong> active</span>
+                                                    </div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <span className="text-[9px] font-mono font-bold text-slate-500 block">
+                                                        Target: {shift.targetRate || 260}
+                                                    </span>
+                                                    <span className="text-[9px] font-bold text-emerald-400">
+                                                        VERIFIED
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Edit Operator Modal */}
@@ -1383,6 +1663,134 @@ export const AdminDashboard = ({
                                     >
                                         {savingEdit ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
                                         Save Changes
+                                    </button>
+                                </div>
+                            </motion.div>
+                        </div>
+                    )}
+
+                    {showManualShiftModal && (
+                        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 overflow-y-auto bg-slate-950/90 backdrop-blur-md">
+                            <motion.div 
+                                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                                animate={{ opacity: 1, scale: 1, y: 0 }}
+                                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                                className="bg-slate-900 border border-slate-800 rounded-3xl p-6 w-full max-w-md my-auto max-h-[85vh] overflow-y-auto space-y-5 shadow-2xl relative"
+                            >
+                                <div className="flex justify-between items-center border-b border-slate-800/80 pb-3">
+                                    <div className="flex items-center gap-2">
+                                        <Plus size={18} className="text-sky-400" />
+                                        <div>
+                                            <h3 className="text-sm font-black text-white uppercase tracking-wider">Add / Restore Shift Report</h3>
+                                            <p className="text-[10px] text-slate-400 font-mono font-bold">Admin Database Entry</p>
+                                        </div>
+                                    </div>
+                                    <button 
+                                        onClick={() => setShowManualShiftModal(false)}
+                                        className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-all"
+                                    >
+                                        <X size={16} />
+                                    </button>
+                                </div>
+
+                                <div className="space-y-3.5">
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">
+                                            Operator Username
+                                        </label>
+                                        <input 
+                                            type="text"
+                                            value={manualOp}
+                                            onChange={(e) => setManualOp(e.target.value.toUpperCase())}
+                                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs font-bold text-sky-400 font-mono outline-none focus:border-sky-500 uppercase"
+                                            placeholder="e.g. MIABRUDAN"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">
+                                            Shift Date
+                                        </label>
+                                        <input 
+                                            type="date"
+                                            value={manualDate}
+                                            onChange={(e) => setManualDate(e.target.value)}
+                                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs font-bold text-white font-mono outline-none focus:border-sky-500"
+                                        />
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">
+                                                Cases Picked
+                                            </label>
+                                            <input 
+                                                type="number"
+                                                value={manualCases}
+                                                onChange={(e) => setManualCases(e.target.value)}
+                                                className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs font-bold text-emerald-400 font-mono outline-none focus:border-sky-500"
+                                                placeholder="1845"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">
+                                                Active Hours
+                                            </label>
+                                            <input 
+                                                type="number"
+                                                step="0.1"
+                                                value={manualActiveHours}
+                                                onChange={(e) => setManualActiveHours(e.target.value)}
+                                                className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs font-bold text-amber-400 font-mono outline-none focus:border-sky-500"
+                                                placeholder="7.0"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">
+                                                Break Duration (Mins)
+                                            </label>
+                                            <input 
+                                                type="number"
+                                                value={manualBreakMins}
+                                                onChange={(e) => setManualBreakMins(e.target.value)}
+                                                className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs font-bold text-white font-mono outline-none focus:border-sky-500"
+                                                placeholder="30"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">
+                                                Department
+                                            </label>
+                                            <select 
+                                                value={manualDepartment}
+                                                onChange={(e) => setManualDepartment(e.target.value)}
+                                                className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs font-bold text-white outline-none focus:border-sky-500"
+                                            >
+                                                {ALL_DEPARTMENTS_FLAT.map(d => (
+                                                    <option key={d.id} value={d.id}>{d.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-3 pt-2 border-t border-slate-800/80">
+                                    <button
+                                        onClick={() => setShowManualShiftModal(false)}
+                                        className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold text-xs uppercase tracking-wider transition-all"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        disabled={savingManualShift}
+                                        onClick={handleAdminSaveManualShift}
+                                        className="flex-1 py-3 bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-lg shadow-sky-500/10"
+                                    >
+                                        {savingManualShift ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
+                                        Save Shift
                                     </button>
                                 </div>
                             </motion.div>

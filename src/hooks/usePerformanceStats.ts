@@ -42,14 +42,22 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
             return { totalShiftSeconds: 0, totalBreakSeconds: 0, activeElapsedSeconds: 0, activeElapsedHours: 0, aislesExemptionDetail: calculateAislesExemptionDetail(0, warehouseConfig?.exemptionRules), spans: [] as { dept: string, start: number, end: number }[] };
         }
         
-        let effectiveNow = (now && typeof now.getTime === 'function' && !isNaN(now.getTime())) ? now.getTime() : Date.now();
-        if (shiftData.isShiftFinalized && shiftData.lastStopTimestamp) {
-            effectiveNow = shiftData.lastStopTimestamp;
-        } else if (shiftData.pickPhaseEndTime) {
-            effectiveNow = shiftData.pickPhaseEndTime;
+        const rawFirstPick = shiftData.firstPickTime || shiftData.firstStartTime;
+        const firstPick = typeof rawFirstPick === 'number' ? (isNaN(rawFirstPick) ? null : rawFirstPick) : (typeof rawFirstPick === 'string' ? Number(rawFirstPick) : null) || firstStart;
+
+        let shiftEndMs = (now && typeof now.getTime === 'function' && !isNaN(now.getTime())) ? now.getTime() : Date.now();
+        if (shiftData.isShiftFinalized && (shiftData.endTime || shiftData.lastStopTimestamp)) {
+            shiftEndMs = shiftData.endTime || shiftData.lastStopTimestamp!;
         }
-        const nowTime = effectiveNow;
-        
+
+        let pickEndMs = shiftEndMs;
+        if (shiftData.pickPhaseEndTime) {
+            pickEndMs = shiftData.pickPhaseEndTime;
+        }
+
+        const totalShiftSeconds = Math.max(0, (shiftEndMs - firstStart) / 1000);
+        const nowTime = pickEndMs;
+
         let currentBreak = 0;
         if (shiftData.isOnBreak && shiftData.breakStartTime) {
             const breakStart = typeof shiftData.breakStartTime === 'number' ? shiftData.breakStartTime : Number(shiftData.breakStartTime);
@@ -86,18 +94,18 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         const activeDept = shiftData.department || 'aisles';
         
         if (chronologicalHistory.length === 0) {
-            currentSpan = { dept: activeDept, start: firstStart, end: nowTime };
+            currentSpan = { dept: activeDept, start: firstPick, end: nowTime };
             spans.push(currentSpan);
         } else {
             for (const h of chronologicalHistory) {
                 const dept = h.department || 'aisles';
                 const rawHStart = h.timestamp;
-                const hStart = (typeof rawHStart === 'number' && !isNaN(rawHStart)) ? rawHStart : (typeof rawHStart === 'string' ? Number(rawHStart) || firstStart : firstStart);
+                const hStart = (typeof rawHStart === 'number' && !isNaN(rawHStart)) ? rawHStart : (typeof rawHStart === 'string' ? Number(rawHStart) || firstPick : firstPick);
                 const elapsedSec = (typeof h.elapsedSeconds === 'number' && !isNaN(h.elapsedSeconds)) ? h.elapsedSeconds : (typeof h.elapsedSeconds === 'string' ? Number(h.elapsedSeconds) || 0 : 0);
                 const hEnd = hStart + (elapsedSec * 1000);
                 
                 if (!currentSpan) {
-                    currentSpan = { dept, start: firstStart, end: hEnd };
+                    currentSpan = { dept, start: firstPick, end: hEnd };
                 } else {
                     if (currentSpan.dept === dept) {
                         currentSpan.end = hEnd;
@@ -135,24 +143,23 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         
         const totalClockSeconds = totalAislesSeconds + totalOtherSeconds;
         
-        let exempt = totalBreaks;
+        const exempt = totalBreaks;
         const detail = calculateAislesExemptionDetail(totalClockSeconds, warehouseConfig?.exemptionRules);
-        exempt += (detail?.total || 0);
 
         const active = Math.max(1, totalClockSeconds - (isNaN(exempt) ? 0 : exempt));
-        const safeTotalClock = (isNaN(totalClockSeconds) || !isFinite(totalClockSeconds)) ? 0 : totalClockSeconds;
+        const safeTotalShift = (isNaN(totalShiftSeconds) || !isFinite(totalShiftSeconds)) ? 0 : totalShiftSeconds;
         const safeActive = (isNaN(active) || !isFinite(active)) ? 0 : active;
         const safeBreaks = (isNaN(totalBreaks) || !isFinite(totalBreaks)) ? 0 : totalBreaks;
         
         return {
-            totalShiftSeconds: safeTotalClock,
+            totalShiftSeconds: safeTotalShift,
             totalBreakSeconds: safeBreaks,
             activeElapsedSeconds: safeActive,
             activeElapsedHours: safeActive / 3600,
             aislesExemptionDetail: detail,
             spans
         };
-    }, [shiftData.firstStartTime, shiftData.pickPhaseEndTime, shiftData.totalExcludedTime, shiftData.isOnBreak, shiftData.breakStartTime, shiftData.department, shiftData.history, shiftData.isPicking, shiftData.pickStartTime, shiftData.isShiftFinalized, shiftData.lastStopTimestamp, now, warehouseConfig]);
+    }, [shiftData.firstStartTime, shiftData.firstPickTime, shiftData.pickPhaseEndTime, shiftData.totalExcludedTime, shiftData.isOnBreak, shiftData.breakStartTime, shiftData.department, shiftData.history, shiftData.isPicking, shiftData.pickStartTime, shiftData.isShiftFinalized, shiftData.lastStopTimestamp, shiftData.endTime, now, warehouseConfig]);
 
     const { totalShiftSeconds, totalBreakSeconds, activeElapsedSeconds, activeElapsedHours, aislesExemptionDetail, spans } = statsSummary;
 
@@ -239,12 +246,7 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
             const clockSec = deptClockSeconds[deptKey] || 0;
             const breaksSec = deptBreaks[deptKey] || 0;
             
-            let exemptSec = 0;
-            const isAislesDept = deptKey.toLowerCase() === 'aisles' || deptKey.toLowerCase().startsWith('aisle');
-            if (isAislesDept) {
-                const detail = calculateAislesExemptionDetail(totalShiftSeconds, warehouseConfig?.exemptionRules);
-                exemptSec = detail.total;
-            }
+            const exemptSec = 0;
 
             const activeSec = Math.max(1, clockSec - exemptSec - breaksSec);
             const hours = activeSec / 3600;

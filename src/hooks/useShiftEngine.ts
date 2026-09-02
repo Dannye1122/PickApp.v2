@@ -7,6 +7,7 @@ import { DEPARTMENTS } from '../constants/data';
 const DEFAULT_SHIFT_DATA: ShiftData = {
   totalCases: 0,
   firstStartTime: null,
+  firstPickTime: null,
   totalExcludedTime: 0,
   history: [],
   steps: 0,
@@ -133,6 +134,7 @@ export function useShiftEngine({ operatorName, warehouseConfig, targetRate = 220
       } else {
         // Ending break
         const addedBreak = prev.breakStartTime ? (currTime - prev.breakStartTime) / 1000 : 0;
+
         return {
           ...prev,
           isOnBreak: false,
@@ -140,7 +142,8 @@ export function useShiftEngine({ operatorName, warehouseConfig, targetRate = 220
           totalExcludedTime: (prev.totalExcludedTime || 0) + addedBreak,
           breakTimeDuringCurrentPick: prev.isPicking 
             ? (prev.breakTimeDuringCurrentPick || 0) + addedBreak 
-            : prev.breakTimeDuringCurrentPick
+            : prev.breakTimeDuringCurrentPick,
+          dinnerExcessTime: 0
         };
       }
     });

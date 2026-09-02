@@ -73,8 +73,10 @@ export interface WarehouseSettings {
 }
 
 export interface ShiftData {
+    shiftCode?: string;
     totalCases: number;
     firstStartTime: number | null;
+    firstPickTime?: number | null;
     totalExcludedTime: number;
     history: any[];
     steps: number;
@@ -174,9 +176,62 @@ export interface LiveUser {
     [key: string]: any;
 }
 
+export interface OrderHistoryRecord {
+  id?: string;
+  orderNumber?: string;
+  cases: number | string;
+  start: string;
+  finish: string;
+  rate: number;
+  durationSeconds?: number;
+  department?: string;
+  zone?: string;
+  storeLabel?: string;
+  timestamp?: number;
+}
+
+export interface DepartmentMetricDetail {
+  name: string;
+  cases: number;
+  ordersCount: number;
+  activeSeconds: number;
+  rate: number;
+}
+
+export interface PerformanceStatsSummary {
+  totalCases: number;
+  activeSeconds: number;
+  totalShiftSeconds: number;
+  totalBreakSeconds: number;
+  currentRate: number;
+  targetRate: number;
+  totalOrders: number;
+  avgOrderDurationSeconds: number;
+  avgCasesPerOrder: number;
+  departmentBreakdown: DepartmentMetricDetail[];
+  consistencyScore: number;
+  consecutiveTargetOrders: number;
+  steps: number;
+  estimatedCalories: number;
+  waterIntakeMl: number;
+}
+
+export interface ShiftPerformanceMetrics {
+  totalCases: number;
+  currentRate: number;
+  targetRate: number;
+  activeTimeFormatted: string;
+  breakTimeFormatted: string;
+  totalTimeFormatted: string;
+  avgOrderDurationFormatted: string;
+  avgCasesFormatted: string;
+  efficiencyPercent: number;
+}
+
 export interface ShiftSummary {
   id?: string;
-  userId: string;
+  shiftCode?: string;
+  userId?: string;
   userName: string;
   department: string;
   zone: string;
@@ -188,8 +243,12 @@ export interface ShiftSummary {
   date?: string;
   clockInTime?: number;
   clockOutTime?: number;
-  history?: any[];
+  history?: OrderHistoryRecord[];
   steps?: number;
+  storeLabel?: string;
+  notes?: string;
+  operatorNote?: string;
+  timestamp?: any;
 }
 
 

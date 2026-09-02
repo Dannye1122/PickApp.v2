@@ -1,5 +1,6 @@
 // Version: 1.7.0-INDUSTRIAL-WMS
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSwipeable } from 'react-swipeable';
 import { PerformanceDashboard } from './components/PerformanceDashboard';
@@ -43,11 +44,8 @@ import {
 import { compressImage } from './lib/imageCompressor';
 import { deviceHaptic, deviceExport, saveImageToDevice } from './lib/deviceApi';
 import { checkUpdate, openDownloadLink, AppVersionInfo, isNewer } from './lib/VersionManager';
-import VoiceAssistant from './components/VoiceAssistant';
 import { PreviousMonthSummary } from './components/leaderboard/PreviousMonthSummary';
-import { BetaSurveyModal } from './components/BetaSurveyModal';
 import { shouldPromptBetaSurvey } from './services/betaSurveyService';
-import { MonthlyReportNotificationModal } from './components/MonthlyReportNotificationModal';
 import { BreakPolicyModal } from './components/modals/BreakPolicyModal';
 import { checkMonthlyReportNotification } from './services/monthlyReportService';
 import { shiftDataService } from './services/shiftDataService';
@@ -62,16 +60,8 @@ import { getDepartmentBreakdown, isBreakEntry, isNoteEntry, isPickEntry } from '
 // New Modular Architecture
 import { OnboardingModal } from './components/OnboardingModal';
 import { PickingDashboardMain } from './components/PickingDashboardMain';
-import { AboutPickApp } from './components/AboutPickApp';
-import { AboutDeveloper } from './components/AboutDeveloper';
-import { InviteModal } from './components/InviteModal';
 import { 
-    OrderFinishModal,
-    ShiftSummaryModal,
-    CaseUnlockModal,
-    ConfirmDialogModal,
-    InstallTutorialModal,
-    NotificationHubModal,
+    AppModalsContainer,
     SettingsModal,
     HistoryLeaderboardOverlays
 } from './components/modals';
@@ -1200,7 +1190,8 @@ export default function App() {
             const lastActive = shiftData.lastStopTimestamp || (shiftData.firstStartTime || 0);
             const hoursSinceActive = (now.getTime() - lastActive) / (1000 * 3600);
             
-            if (hoursSinceActive > 8 || !shiftData.firstStartTime) {
+            // Only reset if inactive for over 20 hours or if no active shift was started
+            if (hoursSinceActive > 20 || (!shiftData.firstStartTime && hoursSinceActive > 8)) {
                 // New day reset
                 setShiftData((prev: any) => {
                     let newStreak = 1;
@@ -1402,6 +1393,13 @@ export default function App() {
             lane4
         };
         const rawJson = JSON.stringify(dataToSave);
+
+        // Immediate synchronous crash recovery backup if shift is in progress
+        if (shiftData.firstStartTime && !shiftData.isShiftFinalized) {
+            const opKey = shiftData.operator ? shiftData.operator.toUpperCase().trim() : 'DEFAULT';
+            safeLocalStorage.setItem(`ACTIVE_SHIFT_CRASH_BACKUP_${opKey}`, rawJson, true);
+            safeLocalStorage.setItem('ACTIVE_SHIFT_CRASH_BACKUP', rawJson, true);
+        }
 
         // Debounce storage writes by 3 seconds to protect mobile devices from high-frequency bridge overhead and disk lag
         const handler = setTimeout(() => {
@@ -1821,7 +1819,7 @@ export default function App() {
 
         doc.setFontSize(9);
         doc.setFont("helvetica", "normal");
-        const logicText = "The application isolates Pure Selection from Logistical Tasks. For Chiller/Freezer, a 180s (3-minute) gap timer applies between orders. For Aisles, there is no manual gap timer; instead, a 45-minute PWA Exemption (5m clock-out, 30m dinner, 10m post-dinner) is applied. IMPORTANT: You MUST press the BREAK button for your dinner; any time exceeding 30 minutes is added back to your active selection time.";
+        const logicText = "The application isolates Pure Selection from Logistical Tasks. For Chiller/Freezer, a 180s (3-minute) gap timer applies between orders. For Aisles, there is no manual gap timer between orders. IMPORTANT: You MUST press the BREAK button when going on break; the main dinner break allowance is 30 minutes, and any excess time over 30 minutes is added back to active pick time.";
         doc.text(doc.splitTextToSize(logicText, 170), 20, yPos);
         
         yPos += 20;
@@ -2212,7 +2210,7 @@ export default function App() {
         haptic('medium');
         setShiftData((prev: any) => ({ 
             ...prev, 
-            firstStartTime: startTime.getTime(),
+            firstPickTime: startTime.getTime(),
         }));
         setShowClockInModal(false);
     };
@@ -2268,18 +2266,14 @@ export default function App() {
         const startTime = now.getTime();
         
         let gapStr = "0s";
-        let gapSecondsToExempt = 0;
 
         if (shiftData.lastStopTimestamp) {
             let gapSec = (startTime - shiftData.lastStopTimestamp) / 1000;
             gapStr = gapSec > 60 ? Math.floor(gapSec/60) + "m " + Math.round(gapSec%60) + "s" : Math.round(gapSec) + "s";
-            
-            if (!isAisles) {
-                gapSecondsToExempt = Math.min(gapSec, 180);
-            }
         }
         
         updateShiftData({
+            firstPickTime: shiftData.firstPickTime || startTime,
             pickStartTime: startTime,
             isPicking: true,
             hasAlerted: false,
@@ -2288,7 +2282,6 @@ export default function App() {
             hasGapAlerted: false,
             breakTimeDuringCurrentPick: 0,
             tempGap: gapStr,
-            totalExcludedTime: shiftData.totalExcludedTime + gapSecondsToExempt,
             caseCount: caseCount,
             isCaseCountModified: false
         });
@@ -2617,11 +2610,11 @@ export default function App() {
             updateShiftData({
                 isOnBreak: false,
                 breakStartTime: null,
-                totalExcludedTime: shiftData.totalExcludedTime + (isDinner ? Math.min(breakDuration, 1800) : breakDuration),
+                totalExcludedTime: shiftData.totalExcludedTime + breakDuration,
                 lastStopTimestamp: now.getTime(),
                 history: [newHistoryEntry, ...shiftData.history],
-                breakTimeDuringCurrentPick: isPicking ? breakTimeDuringCurrentPick + (isDinner ? Math.min(breakDuration, 1800) : breakDuration) : breakTimeDuringCurrentPick,
-                dinnerExcessTime: (shiftData.dinnerExcessTime || 0) + excessDinnerTime
+                breakTimeDuringCurrentPick: isPicking ? breakTimeDuringCurrentPick + breakDuration : breakTimeDuringCurrentPick,
+                dinnerExcessTime: 0
             });
         }
     };
@@ -2886,10 +2879,12 @@ export default function App() {
 
         // Recalculate everything one last time with the fixed final timestamp
         const finalDurationSecs = shiftData.firstStartTime ? (finalTimestamp - shiftData.firstStartTime) / 1000 : 0;
-        const exempt = isAisles ? calculateAislesExemption(finalDurationSecs) : 0;
+        const exempt = 0;
         
-        // Final active time = Duration - Excluded (gaps/manual) - Automatic Exempt
-        const finalActiveSecs = Math.max(1, finalDurationSecs - shiftData.totalExcludedTime - exempt);
+        const pStart = shiftData.firstPickTime || shiftData.firstStartTime;
+        const pEnd = shiftData.pickPhaseEndTime || finalTimestamp;
+        const finalPickSecs = pStart ? Math.max(0, (pEnd - pStart) / 1000) : finalDurationSecs;
+        const finalActiveSecs = Math.max(1, finalPickSecs - shiftData.totalExcludedTime);
         const finalRate = finalActiveSecs > 10 ? Math.round((currentCases / finalActiveSecs) * 3600) : 0;
 
         // 1. Lock states
@@ -2899,10 +2894,11 @@ export default function App() {
             finalizedStats: {
                 rate: finalRate,
                 activeElapsedSeconds: finalActiveSecs,
+                totalShiftSeconds: finalDurationSecs,
                 cases: currentCases,
                 steps: currentSteps,
                 department: currentDeptName,
-                exemption: exempt
+                exemption: 0
             },
             isShiftFinalized: true
         };
@@ -3483,6 +3479,7 @@ export default function App() {
                     </div>
                 </div>
             )}
+
             <div className="relative z-20 shrink-0 pt-safe-top px-4 pb-3 flex justify-center gap-3 bg-slate-950/40 backdrop-blur-[4px] border-b border-slate-900">
                 <button 
                     onClick={() => { haptic('light'); setActiveScreen(0); }} 
@@ -3849,158 +3846,81 @@ export default function App() {
                 )}
             </div>
             
-            {/* Global Overlays & Modals */}
-            <AnimatePresence>
-                {showCelebration && (
-                    <motion.div 
-                        initial={{ opacity: 0, scale: 0.5 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 1.5 }}
-                        className="fixed inset-0 z-[200] flex items-center justify-center pointer-events-none"
-                    >
-                        <div className="bg-slate-900/90 backdrop-blur-xl p-8 rounded-[40px] border border-emerald-500/30 text-center shadow-2xl relative overflow-hidden">
-                            <motion.div 
-                                animate={{ y: [-10, 0, -10] }}
-                                transition={{ duration: 2, repeat: Infinity }}
-                                className="text-6xl mb-4"
-                            >
-                                {celebrationTitle.includes('SKIN') ? '✨' : '🏆'}
-                            </motion.div>
-                            <h2 className="text-white text-3xl font-black italic tracking-tighter mb-2">{celebrationTitle}</h2>
-                            <p className="text-emerald-400 font-bold text-lg">{celebrationSubtitle}</p>
-                            <div className="mt-6 flex gap-2 justify-center">
-                                <Sparkles className="text-emerald-400 animate-pulse" />
-                                <Sparkles className="text-sky-400 animate-pulse delay-75" />
-                                <Sparkles className="text-purple-400 animate-pulse delay-150" />
-                            </div>
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-
-            {isSavingShift && (
-                <div id="saving-overlay" className="fixed inset-0 bg-slate-950/90 flex flex-col items-center justify-center z-[450] px-4 backdrop-blur-md">
-                    <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-emerald-500 mb-4"></div>
-                    <h3 className="text-white text-xl font-bold mb-2">Finalizing Shift</h3>
-                    <p className="text-slate-400 text-sm text-center">Capturing history snapshot & saving data.<br/>Please do not close the app.</p>
-                </div>
-            )}
-
-            {/* Order Finish Procedure Modal */}
-            <OrderFinishModal
+            {/* Global Overlays & Modals Manager */}
+            <AppModalsContainer
+                theme={theme}
+                shiftData={shiftData}
+                userProfile={userProfile}
+                currentWarehouseId={currentWarehouseId}
+                currentDept={currentDept}
+                getCleanName={getCleanName}
+                showToast={showToast}
+                showCelebration={showCelebration}
+                celebrationTitle={celebrationTitle}
+                celebrationSubtitle={celebrationSubtitle}
+                isSavingShift={isSavingShift}
                 orderFinishedData={orderFinishedData}
                 pendingLabelImages={pendingLabelImages}
                 setPendingLabelImages={setPendingLabelImages}
                 setViewingLabels={setViewingLabels}
-                onConfirmFinish={confirmFinishPick}
-            />
-
-                {/* Shift Summary Modal */}
-                <ShiftSummaryModal
-                    isOpen={showSummary}
-                    onClose={() => setShowSummary(false)}
-                    theme={theme}
-                    getSummaryMessage={getSummaryMessage}
-                    isShiftFinalized={isShiftFinalized}
-                    finalizedStats={finalizedStats}
-                    shiftData={shiftData}
-                    rate={rate}
-                    targetRate={targetRate}
-                    activeElapsedSeconds={activeElapsedSeconds}
-                    isAisles={isAisles}
-                    finalExemption={finalExemption}
-                    accruedPostDinner={accruedPostDinner}
-                    accruedDinner={accruedDinner}
-                    accruedClockOut={accruedClockOut}
-                    shiftNotes={shiftNotes}
-                    setShiftNotes={setShiftNotes}
-                    updateShiftData={updateShiftData}
-                    takeScreenshot={takeScreenshot}
-                    downloadReport={downloadReport}
-                    endShift={endShift}
-                />
-
-                {/* Case Count Unlock / Edit Modal */}
-                <CaseUnlockModal
-                    isUnlockingCaseCount={isUnlockingCaseCount}
-                    isEditingCaseCount={isEditingCaseCount}
-                    unlockPin={unlockPin}
-                    setUnlockPin={setUnlockPin}
-                    unlockError={unlockError}
-                    tempCaseCount={tempCaseCount}
-                    setTempCaseCount={setTempCaseCount}
-                    handleVerifyUnlock={handleVerifyUnlock}
-                    handleSaveModifiedCaseCount={handleSaveModifiedCaseCount}
-                    onClose={() => {
-                        setIsUnlockingCaseCount(false);
-                        setIsEditingCaseCount(false);
-                    }}
-                />
-
-                {/* Confirm Dialog Overlay */}
-                <ConfirmDialogModal
-                    confirmDialog={confirmDialog}
-                    setConfirmDialog={setConfirmDialog}
-                    theme={theme}
-                />
-
-                {/* Install Tutorial Overlay */}
-                <InstallTutorialModal
-                    isOpen={showInstallTutorial}
-                    onClose={() => setShowInstallTutorial(false)}
-                    theme={theme}
-                />
-
-            {/* About PickApp Section */}
-            <AboutPickApp isOpen={showAbout} onClose={() => setShowAbout(false)} />
-            <AboutDeveloper isOpen={showAboutDeveloper} onClose={() => setShowAboutDeveloper(false)} />
-            <InviteModal isOpen={showInviteModal} onClose={() => setShowInviteModal(false)} />
-            <BetaSurveyModal 
-                isOpen={showBetaSurvey}
-                onClose={() => setShowBetaSurvey(false)}
-                username={getCleanName()}
-                department={currentDept?.name || shiftData.department}
-                zone={shiftData.zone}
-                onSuccess={() => {
-                    showToast("Operational feedback recorded. Thank you!", "success");
-                }}
-            />
-            <MonthlyReportNotificationModal
-                isOpen={monthlyReportNotif.isOpen}
-                onClose={() => setMonthlyReportNotif(prev => ({ ...prev, isOpen: false }))}
-                monthName={monthlyReportNotif.monthName}
-                reportKey={monthlyReportNotif.reportKey}
-                warehouseId={currentWarehouseId}
-                onSuccess={() => {
-                    showToast("Executive Monthly PDF Report Downloaded!", "success");
-                }}
-            />
-
-            {/* Shift Notification Hub Modal */}
-            <NotificationHubModal
-                isOpen={showNotificationHub}
-                onClose={() => setShowNotificationHub(false)}
-                notifications={shiftNotifications}
-                onMarkAsRead={handleMarkNotificationAsRead}
-                onMarkAllAsRead={handleMarkAllNotificationsAsRead}
-                onClearAll={handleClearAllNotifications}
-                onDeleteNotification={handleDeleteNotification}
-                onSendInteractionReply={async (recipient, type) => {
-                    const sender = (shiftData.operator || userProfile?.username || 'Teammate').toUpperCase().trim();
-                    const res = await sendSocialInteraction(sender, recipient, type);
-                    if (res && res.message) {
-                        showToast(res.message, "success");
-                    }
-                }}
-                currentOperator={(shiftData.operator || userProfile?.username || '').toUpperCase().trim()}
-            />
-
-            <VoiceAssistant 
-                isActive={shiftData.voiceEnabled} 
-                onToggle={toggleVoice}
-                onCommand={handleVoiceCommand}
-                announcementProp={announcement}
-                customImage={shiftData.assistantImage}
+                confirmFinishPick={confirmFinishPick}
+                showSummary={showSummary}
+                setShowSummary={setShowSummary}
+                getSummaryMessage={getSummaryMessage}
+                isShiftFinalized={isShiftFinalized}
+                finalizedStats={finalizedStats}
+                rate={rate}
+                targetRate={targetRate}
+                activeElapsedSeconds={activeElapsedSeconds}
+                isAisles={isAisles}
+                finalExemption={finalExemption}
+                accruedPostDinner={accruedPostDinner}
+                accruedDinner={accruedDinner}
+                accruedClockOut={accruedClockOut}
+                shiftNotes={shiftNotes}
+                setShiftNotes={setShiftNotes}
+                updateShiftData={updateShiftData}
+                takeScreenshot={takeScreenshot}
+                downloadReport={downloadReport}
+                endShift={endShift}
+                isUnlockingCaseCount={isUnlockingCaseCount}
+                isEditingCaseCount={isEditingCaseCount}
+                unlockPin={unlockPin}
+                setUnlockPin={setUnlockPin}
+                unlockError={unlockError}
+                tempCaseCount={tempCaseCount}
+                setTempCaseCount={setTempCaseCount}
+                handleVerifyUnlock={handleVerifyUnlock}
+                handleSaveModifiedCaseCount={handleSaveModifiedCaseCount}
+                setIsUnlockingCaseCount={setIsUnlockingCaseCount}
+                setIsEditingCaseCount={setIsEditingCaseCount}
+                confirmDialog={confirmDialog}
+                setConfirmDialog={setConfirmDialog}
+                showInstallTutorial={showInstallTutorial}
+                setShowInstallTutorial={setShowInstallTutorial}
+                showAbout={showAbout}
+                setShowAbout={setShowAbout}
+                showAboutDeveloper={showAboutDeveloper}
+                setShowAboutDeveloper={setShowAboutDeveloper}
+                showInviteModal={showInviteModal}
+                setShowInviteModal={setShowInviteModal}
+                showBetaSurvey={showBetaSurvey}
+                setShowBetaSurvey={setShowBetaSurvey}
+                monthlyReportNotif={monthlyReportNotif}
+                setMonthlyReportNotif={setMonthlyReportNotif}
+                showNotificationHub={showNotificationHub}
+                setShowNotificationHub={setShowNotificationHub}
+                shiftNotifications={shiftNotifications}
+                handleMarkNotificationAsRead={handleMarkNotificationAsRead}
+                handleMarkAllNotificationsAsRead={handleMarkAllNotificationsAsRead}
+                handleClearAllNotifications={handleClearAllNotifications}
+                handleDeleteNotification={handleDeleteNotification}
+                toggleVoice={toggleVoice}
+                handleVoiceCommand={handleVoiceCommand}
+                announcement={announcement}
+                activeInteraction={activeInteraction}
+                setActiveInteraction={setActiveInteraction}
+                toast={toast}
             />
 
             {/* PERSISTENT INDUSTRIAL STATUS BAR */}
@@ -4028,43 +3948,6 @@ export default function App() {
                         <span className="text-[9px] font-black text-slate-600 uppercase tracking-[0.3em] font-mono">V{APP_VERSION}</span>
                     </div>
                 </div>
-            </div>
-            
-            {/* Global Forensic Notification Toast Overlay */}
-            <div className="fixed top-safe-top left-0 right-0 z-[1000] pointer-events-none p-4 flex flex-col items-center gap-2">
-                <InteractionToast 
-                    interaction={activeInteraction} 
-                    onDismiss={() => setActiveInteraction(null)} 
-                    onOpenHub={() => {
-                        setActiveInteraction(null);
-                        setShowNotificationHub(true);
-                    }}
-                    onQuickReply={async (recipient, type) => {
-                        const sender = (shiftData.operator || userProfile?.username || 'Teammate').toUpperCase().trim();
-                        const res = await sendSocialInteraction(sender, recipient, type);
-                        if (res && res.message) {
-                            showToast(res.message, "success");
-                        }
-                    }}
-                />
-                <AnimatePresence>
-                    {toast && (
-                        <motion.div
-                            initial={{ opacity: 0, y: -20, scale: 0.9 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.8 }}
-                            className={`px-4 py-2.5 rounded-2xl shadow-2xl backdrop-blur-md border ${
-                                toast.type === 'error' ? 'bg-red-500/90 border-red-400 text-white' :
-                                toast.type === 'success' ? 'bg-emerald-500/90 border-emerald-400 text-white' :
-                                'bg-slate-800/90 border-slate-700 text-white'
-                            } text-sm font-black tracking-tight pointer-events-auto flex items-center gap-3`}
-                        >
-                            {toast.type === 'error' && <AlertCircle size={16} />}
-                            {toast.type === 'success' && <CheckCircle size={16} />}
-                            {toast.message}
-                        </motion.div>
-                    )}
-                </AnimatePresence>
             </div>
         </div>
     );

@@ -76,38 +76,32 @@ export function generateFullShiftReport(shift: any): string {
   const lastHistFinish = history.length > 0 && history[history.length - 1].finish && history[history.length - 1].finish !== '--:--' ? history[history.length - 1].finish : null;
 
   const rawClockIn = shift.firstStartTime || shift.startTime || firstHistStart;
-  let clockInMs = shift.clockInTime;
-  let clockInFormatted = rawClockIn;
-
-  if (!clockInFormatted && clockInMs) {
-    clockInFormatted = new Date(clockInMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } else if (!clockInFormatted) {
-    clockInFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-
-  if (!clockInMs) {
-    if (rawClockIn && dateStr) {
-      try {
-        const [h, m] = rawClockIn.split(':').map((x: string) => parseInt(x, 10));
-        const d = new Date(dateStr);
-        if (!isNaN(h) && !isNaN(m)) {
-          d.setHours(h, m, 0, 0);
-          clockInMs = d.getTime();
-        }
-      } catch (e) {
-        clockInMs = Date.now();
+  let clockInMs = shift.clockInTime || shift.firstStartTime;
+  
+  if (!clockInMs && rawClockIn && dateStr) {
+    try {
+      const parts = rawClockIn.split(':').map((x: string) => parseInt(x, 10));
+      const d = new Date(dateStr.includes('T') ? dateStr : `${dateStr}T00:00:00`);
+      if (!isNaN(parts[0]) && !isNaN(parts[1])) {
+        d.setHours(parts[0], parts[1], parts[2] || 0, 0);
+        clockInMs = d.getTime();
       }
-    } else {
+    } catch (e) {
       clockInMs = Date.now();
     }
   }
+  if (!clockInMs) clockInMs = Date.now();
 
-  let clockOutFormatted = shift.clockOutFormatted || lastHistFinish;
-  let clockOutMs = shift.clockOutTime || (clockInMs && shift.totalSeconds ? clockInMs + shift.totalSeconds * 1000 : Date.now());
-  if (!clockOutFormatted && clockOutMs) {
-    clockOutFormatted = new Date(clockOutMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
+  let clockInFormatted = clockInMs ? new Date(clockInMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : (rawClockIn || '--:--:--');
+
+  let clockOutMs = shift.clockOutTime || shift.endTime || (clockInMs && shift.totalSeconds ? clockInMs + shift.totalSeconds * 1000 : Date.now());
+  let clockOutFormatted = clockOutMs ? new Date(clockOutMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : (shift.clockOutFormatted || lastHistFinish || '--:--:--');
   
+  const pickStartMs = shift.firstPickTime || clockInMs;
+  const pickEndMs = shift.pickPhaseEndTime || clockOutMs;
+  const pickStartFormatted = pickStartMs ? new Date(pickStartMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--';
+  const pickEndFormatted = pickEndMs ? new Date(pickEndMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--';
+
   const totalCases = shift.totalCases || shift.cases || 0;
   const appRate = shift.finalRate || shift.rate || 0;
   const systemRate = Math.round(appRate * 1.02);
@@ -130,12 +124,17 @@ export function generateFullShiftReport(shift: any): string {
 
   let csv = "sep=,\n";
   csv += `"SUMMARY TYPE","DATA"\n`;
+  csv += `"Shift Code","${shift.shiftCode || 'N/A'}"\n`;
   csv += `"Operator","${operatorName}"\n`;
   csv += `"Date","${dateStr}"\n`;
   csv += `"Clock In Time","${clockInFormatted}"\n`;
   csv += `"Clock Out Time","${clockOutFormatted}"\n`;
+  csv += `"Pick Start Time","${pickStartFormatted}"\n`;
+  csv += `"Pick End Time","${pickEndFormatted}"\n`;
   csv += `"Clock In Timestamp","${clockInMs}"\n`;
   csv += `"Clock Out Timestamp","${clockOutMs}"\n`;
+  csv += `"Pick Start Timestamp","${pickStartMs}"\n`;
+  csv += `"Pick End Timestamp","${pickEndMs}"\n`;
   csv += `"App Rate","${appRate}"\n`;
   csv += `"System Rate","${systemRate}"\n`;
   csv += `"Total Cases","${totalCases}"\n`;

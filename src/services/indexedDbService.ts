@@ -8,7 +8,7 @@
  */
 
 const DB_NAME = 'PickAppLocalDB';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 export const STORES = {
   ROTAS: 'rotas',
@@ -35,6 +35,7 @@ export const initLocalDB = (): Promise<IDBDatabase> => {
 
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
+      const tx = (event.target as IDBOpenDBRequest).transaction;
 
       // 1. Shift Rotas
       if (!db.objectStoreNames.contains(STORES.ROTAS)) {
@@ -52,16 +53,30 @@ export const initLocalDB = (): Promise<IDBDatabase> => {
       }
 
       // 4. Shift History (Supports multi-week offline shift records)
+      let shiftStore: IDBObjectStore;
       if (!db.objectStoreNames.contains(STORES.SHIFT_HISTORY)) {
-        const shiftStore = db.createObjectStore(STORES.SHIFT_HISTORY, { keyPath: 'id' });
+        shiftStore = db.createObjectStore(STORES.SHIFT_HISTORY, { keyPath: 'id' });
+      } else {
+        shiftStore = tx!.objectStore(STORES.SHIFT_HISTORY);
+      }
+      if (!shiftStore.indexNames.contains('userName')) {
         shiftStore.createIndex('userName', 'userName', { unique: false });
+      }
+      if (!shiftStore.indexNames.contains('date')) {
         shiftStore.createIndex('date', 'date', { unique: false });
       }
 
       // 5. Label Photos (High capacity storage without localStorage limits)
+      let photoStore: IDBObjectStore;
       if (!db.objectStoreNames.contains(STORES.LABEL_PHOTOS)) {
-        const photoStore = db.createObjectStore(STORES.LABEL_PHOTOS, { keyPath: 'id' });
+        photoStore = db.createObjectStore(STORES.LABEL_PHOTOS, { keyPath: 'id' });
+      } else {
+        photoStore = tx!.objectStore(STORES.LABEL_PHOTOS);
+      }
+      if (!photoStore.indexNames.contains('userName')) {
         photoStore.createIndex('userName', 'userName', { unique: false });
+      }
+      if (!photoStore.indexNames.contains('date')) {
         photoStore.createIndex('date', 'date', { unique: false });
       }
 
@@ -71,10 +86,19 @@ export const initLocalDB = (): Promise<IDBDatabase> => {
       }
 
       // 7. Shift Notifications & Peer Interactions
+      let notifStore: IDBObjectStore;
       if (!db.objectStoreNames.contains(STORES.NOTIFICATIONS)) {
-        const notifStore = db.createObjectStore(STORES.NOTIFICATIONS, { keyPath: 'id' });
+        notifStore = db.createObjectStore(STORES.NOTIFICATIONS, { keyPath: 'id' });
+      } else {
+        notifStore = tx!.objectStore(STORES.NOTIFICATIONS);
+      }
+      if (!notifStore.indexNames.contains('operator')) {
         notifStore.createIndex('operator', 'operator', { unique: false });
+      }
+      if (!notifStore.indexNames.contains('timestamp')) {
         notifStore.createIndex('timestamp', 'timestamp', { unique: false });
+      }
+      if (!notifStore.indexNames.contains('category')) {
         notifStore.createIndex('category', 'category', { unique: false });
       }
     };
@@ -166,14 +190,35 @@ export async function getAllLocalItems<T = any>(
       const store = tx.objectStore(storeName);
       
       let req: IDBRequest;
-      if (indexName && queryValue !== undefined) {
-        const index = store.index(indexName);
-        req = index.getAll(queryValue);
+      let usedIndex = false;
+
+      if (indexName && queryValue !== undefined && store.indexNames && store.indexNames.contains(indexName)) {
+        try {
+          const index = store.index(indexName);
+          req = index.getAll(queryValue);
+          usedIndex = true;
+        } catch {
+          req = store.getAll();
+        }
       } else {
         req = store.getAll();
       }
 
-      req.onsuccess = () => resolve(req.result || []);
+      req.onsuccess = () => {
+        let results = req.result || [];
+        // If we queried by index key but couldn't use index or need exact filtering
+        if (indexName && queryValue !== undefined && !usedIndex) {
+          results = results.filter((item: any) => {
+            if (!item) return false;
+            const val = item[indexName];
+            if (typeof val === 'string' && typeof queryValue === 'string') {
+              return val.toUpperCase() === (queryValue as string).toUpperCase();
+            }
+            return val === queryValue;
+          });
+        }
+        resolve(results);
+      };
       req.onerror = () => reject(req.error);
     });
   } catch (err) {

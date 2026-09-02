@@ -21,7 +21,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({ isOpen, onClose }) => 
         : 'https://ais-pre-734weu2yuruq4kkrcrtfq3-126359002329.europe-west3.run.app';
 
     const shareTitle = "Join PickApp — Real-Time Warehouse Picking & Leaderboards";
-    const shareMessage = `Hey! Join me on PickApp to track pick rates, 45-min exemption math, live leaderboards, and shift stats in real-time. Access here: ${appUrl}`;
+    const shareMessage = `Hey! Join me on PickApp to track pick rates, live leaderboards, and shift stats in real-time. Access here: ${appUrl}`;
 
     useEffect(() => {
         if (isOpen && appUrl) {

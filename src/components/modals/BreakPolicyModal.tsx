@@ -32,19 +32,15 @@ export const BreakPolicyModal: React.FC<BreakPolicyModalProps> = ({ isOpen, onCl
           </div>
 
           <div className="space-y-4 text-slate-300 text-sm mb-8">
-            <p>The 45-minute exempt time is now reorganized:</p>
-            <ul className="list-disc list-inside space-y-1">
-              <li>5 mins: Deducted at clock-out.</li>
-              <li>30 mins: Dinner break.</li>
-              <li>10 mins: Post-dinner adjustment.</li>
+            <p>Break Duration Policy:</p>
+            <ul className="list-disc list-inside space-y-2 text-slate-300">
+              <li>Multiple short breaks during your shift are permitted.</li>
+              <li>The main dinner break deduction allowance is capped at 30 minutes.</li>
+              <li>If your dinner break exceeds 30 minutes, the excess time is added back to your pick time, reflecting in your performance calculation.</li>
             </ul>
-            <p className="font-bold text-white flex items-center gap-2">
+            <p className="font-bold text-amber-400 flex items-center gap-2 pt-2">
               <Coffee size={18} className="text-amber-500" />
-              IMPORTANT: You MUST press the break button for dinner!
-            </p>
-            <p>
-              The dinner exemption is 30 minutes. If your dinner break exceeds 30 minutes, 
-              the extra time is added back to your working time, which can lower your pick rate.
+              IMPORTANT: Always press the BREAK button when going on break!
             </p>
           </div>
 
