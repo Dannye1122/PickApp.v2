@@ -3,6 +3,7 @@ import { Mic, MicOff, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Owl } from './branding/Owl';
 import { GreenMascotOwl } from './branding/GreenMascotOwl';
+import { voiceService } from '../services/voiceService';
 
 interface VoiceAssistantProps {
   onCommand: (command: string, value?: number) => void;
@@ -73,31 +74,6 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ onCommand, isActive, on
       setBubbleText(text);
   };
 
-  // Text to Speech Functionality
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-    
-    const loadVoices = () => {
-      try {
-        const availableVoices = window.speechSynthesis.getVoices();
-        if (availableVoices && availableVoices.length > 0) {
-          setVoices(availableVoices);
-        }
-      } catch (e) {
-        console.warn('Failed to load speech synthesis voices:', e);
-      }
-    };
-    
-    loadVoices();
-    try {
-      if (window.speechSynthesis.onvoiceschanged !== undefined) {
-        window.speechSynthesis.onvoiceschanged = loadVoices;
-      }
-    } catch (e) {}
-  }, []);
-
   const [isSpeaking, setIsSpeaking] = useState(false);
 
   useEffect(() => {
@@ -108,55 +84,21 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ onCommand, isActive, on
             setBubbleText("");
         }, 5500);
 
-        if (typeof window !== 'undefined' && window.speechSynthesis) {
-            const vList = voices.length > 0 ? voices : (window.speechSynthesis.getVoices ? window.speechSynthesis.getVoices() : []);
-            if (vList.length === 0) return () => clearTimeout(bubbleTimer);
-
+        if (voiceService.isSupported()) {
             try {
-                if (!window.SpeechSynthesisUtterance) return () => clearTimeout(bubbleTimer);
-                const utterance = new window.SpeechSynthesisUtterance(textToSpeak);
-                
-                const getPreferredVoice = () => {
-                    const prioritizedKeywords = [
-                        'natural', 'enhanced', 'siri', 'premium', 'google', 
-                        'ava', 'allison', 'evan', 'nathan', 'samantha', 'victoria'
-                    ];
-                    
-                    for (const keyword of prioritizedKeywords) {
-                        const found = vList.find(v => v.name.toLowerCase().includes(keyword) && v.lang.startsWith('en'));
-                        if (found) return found;
+                voiceService.speak(textToSpeak, {
+                    rate: 1.3,
+                    pitch: 1.8,
+                    volume: 0.8,
+                    onStart: () => setIsSpeaking(true),
+                    onEnd: () => setIsSpeaking(false),
+                    onError: (e) => {
+                        console.error('Owl speech error:', e);
+                        setIsSpeaking(false);
                     }
-                    return vList.find(v => v.lang.startsWith('en')) || vList[0];
-                };
-
-                const preferredVoice = getPreferredVoice();
-                if (preferredVoice) {
-                    utterance.voice = preferredVoice;
-                    utterance.rate = 1.3; 
-                    utterance.pitch = 1.8; 
-                } else {
-                    utterance.rate = 1.25;
-                    utterance.pitch = 1.6;
-                }
-
-                utterance.volume = 0.8; 
-
-                utterance.onstart = () => {
-                    // Owl started talking
-                    setIsSpeaking(true);
-                };
-                utterance.onend = () => {
-                    // Owl finished talking
-                    setIsSpeaking(false);
-                };
-                utterance.onerror = (e) => {
-                    console.error('Owl speech error:', e);
-                    setIsSpeaking(false);
-                };
-
-                window.speechSynthesis.speak(utterance);
+                });
             } catch (speakError) {
-                console.warn('SpeechSynthesisUtterance initialization failed:', speakError);
+                console.warn('VoiceService speak failed:', speakError);
             }
         }
 
@@ -169,7 +111,7 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ onCommand, isActive, on
         }
         return () => clearTimeout(bubbleTimer);
     }
-  }, [announcement, announcementProp, voices]);
+  }, [announcement, announcementProp]);
 
   const startListening = useCallback(() => {
     // Microphone/SpeechRecognition is locked & disabled for user privacy

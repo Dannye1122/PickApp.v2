@@ -5,7 +5,7 @@ import {
     Coffee, Zap, RefreshCcw, Hash, AlertCircle, BookOpen, Download, RotateCcw, Activity, Volume2,
     Bell, Mic, Power, ExternalLink, Shield, Clock, LogOut, Database, RefreshCw, XOctagon, HardDrive,
     FileBox, ShieldCheck, Wrench, Layers, Trash2, FileSpreadsheet, Cpu, Terminal, Camera, ShieldAlert,
-    Cloud, Check, Languages, VolumeX, HelpCircle, Award, CheckCircle2, Play
+    Cloud, Check, Languages, VolumeX, HelpCircle, Award, CheckCircle2, Play, Battery
 } from 'lucide-react';
 import { auth } from '../../lib/firebase';
 import { APP_VERSION } from '../../constants/version';
@@ -440,6 +440,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     </div>
                                 </div>
 
+                                {/* Custom Operational Status */}
+                                <div className="space-y-4">
+                                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Live Custom Status</label>
+                                    <div className="relative group">
+                                        <div className="absolute inset-y-0 left-4 flex items-center text-slate-600 group-focus-within:text-sky-500 transition-colors">
+                                            <Terminal size={18} />
+                                        </div>
+                                        <input 
+                                            type="text" 
+                                            maxLength={30}
+                                            value={shiftData.customStatus || ''} 
+                                            onChange={(e) => setShiftData({...shiftData, customStatus: e.target.value})}
+                                            className="w-full bg-slate-950 border-2 border-slate-800/80 py-5 pl-12 pr-4 rounded-2xl text-white tracking-wide focus:ring-1 focus:ring-sky-500/50 focus:border-sky-500/50 outline-none transition-all placeholder-slate-800"
+                                            placeholder="What are you up to? (e.g., ⚡ Picking Fast)"
+                                        />
+                                    </div>
+                                    <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+                                        {[
+                                            { label: '⚡ Picking Fast', val: '⚡ Picking Fast' },
+                                            { label: '🛒 Loading Cart', val: '🛒 Loading Cart' },
+                                            { label: '☕ Short Break', val: '☕ Short Break' },
+                                            { label: '🇮🇹 Learning Italian', val: '🇮🇹 Learning Italian' },
+                                        ].map((preset) => (
+                                            <button
+                                                key={preset.val}
+                                                onClick={() => {
+                                                    haptic('light');
+                                                    setShiftData({ ...shiftData, customStatus: preset.val });
+                                                }}
+                                                className={`px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-wider border whitespace-nowrap transition-all ${
+                                                    shiftData.customStatus === preset.val
+                                                        ? 'bg-sky-500/20 border-sky-400 text-sky-400'
+                                                        : 'bg-slate-950/60 border-slate-800 text-slate-500 hover:text-slate-300'
+                                                }`}
+                                            >
+                                                {preset.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
                                 {/* Store Label Input */}
                                 <div className="space-y-4">
                                     <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Store Identity Label</label>
@@ -858,6 +899,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                             <Zap size={20} className={shiftData.wakeLock ? "fill-white animate-pulse" : ""} />
                                         </div>
                                         {shiftData.wakeLock ? 'WAKE_LOCK_ENGAGED' : 'ENGAGE_WAKE_LOCK'}
+                                    </button>
+
+                                    <button 
+                                        className={`w-full py-6 rounded-[32px] font-black text-[12px] uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-4 border-2 ${shiftData.batterySaver ? `bg-emerald-600 text-white border-transparent shadow-[0_0_25px_rgba(16,185,129,0.3)]` : 'bg-slate-950 text-slate-700 border-slate-800/80 shadow-inner'}`}
+                                        onClick={() => { setShiftData({...shiftData, batterySaver: !shiftData.batterySaver}); haptic('medium'); }}
+                                    >
+                                        <div className={`p-2 rounded-xl ${shiftData.batterySaver ? 'bg-white/20' : 'bg-slate-900'}`}>
+                                            <Battery size={20} className={shiftData.batterySaver ? "fill-white animate-pulse" : ""} />
+                                        </div>
+                                        {shiftData.batterySaver ? 'BATTERY_SAVER_ACTIVE' : 'ACTIVATE_BATTERY_SAVER'}
                                     </button>
                                     {wakeLockError && (
                                         <div className="space-y-4">

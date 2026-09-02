@@ -1,8 +1,11 @@
 export interface SpeechOptions {
   lang?: string;
   rate?: number;
+  pitch?: number;
   volume?: number;
+  onStart?: () => void;
   onEnd?: () => void;
+  onError?: (e: any) => void;
 }
 
 export const voiceService = {
@@ -16,6 +19,24 @@ export const voiceService = {
     }
   },
 
+  getVoices(): SpeechSynthesisVoice[] {
+    if (!this.isSupported()) return [];
+    return window.speechSynthesis.getVoices() || [];
+  },
+
+  getPreferredVoice(vList: SpeechSynthesisVoice[]): SpeechSynthesisVoice | undefined {
+    const prioritizedKeywords = [
+      'natural', 'enhanced', 'siri', 'premium', 'google', 
+      'ava', 'allison', 'evan', 'nathan', 'samantha', 'victoria'
+    ];
+    
+    for (const keyword of prioritizedKeywords) {
+      const found = vList.find(v => v.name.toLowerCase().includes(keyword) && v.lang.startsWith('en'));
+      if (found) return found;
+    }
+    return vList.find(v => v.lang.startsWith('en')) || vList[0];
+  },
+
   speak(text: string, options: SpeechOptions = {}): void {
     if (!this.isSupported()) return;
 
@@ -23,17 +44,27 @@ export const voiceService = {
       this.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       
+      const vList = this.getVoices();
+      if (vList.length > 0) {
+        const preferredVoice = this.getPreferredVoice(vList);
+        if (preferredVoice) {
+          utterance.voice = preferredVoice;
+        }
+      }
+
       if (options.lang) utterance.lang = options.lang;
       if (options.rate !== undefined) utterance.rate = options.rate;
+      if (options.pitch !== undefined) utterance.pitch = options.pitch;
       if (options.volume !== undefined) utterance.volume = options.volume;
       
-      if (options.onEnd) {
-        utterance.onend = options.onEnd;
-      }
+      if (options.onStart) utterance.onstart = options.onStart;
+      if (options.onEnd) utterance.onend = options.onEnd;
+      if (options.onError) utterance.onerror = options.onError;
 
       window.speechSynthesis.speak(utterance);
     } catch (error) {
       console.warn('VoiceService speak failed:', error);
+      if (options.onError) options.onError(error);
     }
   },
 
@@ -80,3 +111,4 @@ export const voiceService = {
     }
   }
 };
+

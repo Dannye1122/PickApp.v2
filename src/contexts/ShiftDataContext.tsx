@@ -48,6 +48,7 @@ export const defaultShiftData = {
     lastGapAlertTimestamp: null,
     hasHalfwayAlerted: false,
     wakeLock: false,
+    batterySaver: false,
     consecutiveTargetOrders: 0,
     appVersion: APP_VERSION,
     // Personal Records & Consistency

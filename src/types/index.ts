@@ -107,6 +107,7 @@ export interface ShiftData {
     lastGapAlertTimestamp: number | null;
     hasHalfwayAlerted: boolean;
     wakeLock: boolean;
+    batterySaver?: boolean;
     consecutiveTargetOrders: number;
     appVersion: string;
     personalBests: Record<string, number>;

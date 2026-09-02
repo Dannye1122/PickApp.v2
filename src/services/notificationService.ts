@@ -1,5 +1,7 @@
 // Inactivity and System Notification Service for PickApp
 
+import { playAlertSound } from './audioService';
+
 const LAST_ACTIVE_KEY = 'pickapp_last_active_timestamp';
 const NOTIF_ENABLED_KEY = 'pickapp_inactivity_notifs_enabled';
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000; // 3 days in milliseconds
@@ -76,6 +78,7 @@ export const sendInactivityNotification = (customText?: string) => {
     }
 
     const title = '🦉 Hootie misses you in PickApp!';
+    playAlertSound('info');
     const options: NotificationOptions = {
         body: customText || "It's been 3 days since your last shift! Ready to log your picks, boost your XP, and climb the leaderboard?",
         icon: '/icon.svg',

@@ -151,13 +151,19 @@ export const fetchLeaderboard = async (
   const targetDates = Array.from(new Set([localToday, localYesterday, utcToday, utcYesterday]));
 
   try {
-    // 1. Fetch recent live leaderboard entries
-    const q = query(
-      leaderboardRef, 
-      where('date', 'in', targetDates)
-    );
-    const snapshot = await getDocs(q);
-    let entries = snapshot.docs.map(doc => doc.data() as LeaderboardEntry);
+    // 1. Fetch recent live leaderboard entries AND all active users
+    const qRecent = query(leaderboardRef, where('date', 'in', targetDates));
+    const qActive = query(leaderboardRef, where('isActive', '==', true));
+    
+    const [recentSnap, activeSnap] = await Promise.all([
+      getDocs(qRecent),
+      getDocs(qActive)
+    ]);
+    
+    let entries = [
+      ...recentSnap.docs.map(doc => doc.data() as LeaderboardEntry),
+      ...activeSnap.docs.map(doc => doc.data() as LeaderboardEntry)
+    ];
     
     // Also fetch all entries if today/yesterday query returned very few
     if (entries.length === 0) {
@@ -201,12 +207,33 @@ export const fetchLeaderboard = async (
     }
 
     const dailyBots = getDailyAIBots();
-    let uniqueEntries = [...Object.values(bestUserEntries), ...dailyBots];
-    uniqueEntries.sort((a, b) => (b.rate || 0) - (a.rate || 0));
-    uniqueEntries = uniqueEntries.slice(0, 25);
     
-    setCachedData(cacheKey, uniqueEntries);
-    return uniqueEntries;
+    // Ensure top performer per department is included
+    const bestPerDept: Record<string, LeaderboardEntry> = {};
+    Object.values(bestUserEntries).forEach(entry => {
+        if (!entry.department) return;
+        if (!bestPerDept[entry.department] || (entry.rate || 0) > (bestPerDept[entry.department].rate || 0)) {
+            bestPerDept[entry.department] = entry;
+        }
+    });
+
+    let uniqueEntries = [...Object.values(bestUserEntries), ...dailyBots, ...Object.values(bestPerDept)];
+    
+    // Remove duplicates
+    const finalEntries: Record<string, LeaderboardEntry> = {};
+    uniqueEntries.forEach(entry => {
+        const key = (entry.name || '').toUpperCase().trim();
+        if (!finalEntries[key] || (entry.rate || 0) > (finalEntries[key].rate || 0)) {
+            finalEntries[key] = entry;
+        }
+    });
+
+    let resultEntries = Object.values(finalEntries);
+    resultEntries.sort((a, b) => (b.rate || 0) - (a.rate || 0));
+    resultEntries = resultEntries.slice(0, 50); // Increased limit slightly to accommodate depts
+    
+    setCachedData(cacheKey, resultEntries);
+    return resultEntries;
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'leaderboard');
     const cached = getCachedData<LeaderboardEntry[]>(cacheKey) || [];

@@ -1592,6 +1592,22 @@ export default function App() {
                         // Notify user in system UI
                         showToast(`🇮🇹 Italian Coach: "${vocabItem.italian}" - ${vocabItem.english}`, 'info');
 
+                        // Dynamically update the operator's custom status on the live globe and leaderboard
+                        setShiftData((prev: any) => ({
+                            ...prev,
+                            customStatus: `🇮🇹 ${vocabItem.italian}`
+                        }));
+
+                        // Auto-revert status to idle or previous status after 2 minutes (120 seconds)
+                        setTimeout(() => {
+                            setShiftData((prev: any) => {
+                                if (prev.customStatus === `🇮🇹 ${vocabItem.italian}`) {
+                                    return { ...prev, customStatus: "" };
+                                }
+                                return prev;
+                            });
+                        }, 120000);
+
                         // Increment repetition & round-robin vocab index
                         const nextIndex = (currentIndex + 1) % lesson.vocabulary.length;
                         localStorage.setItem('italian_coach_vocab_index', nextIndex.toString());
@@ -2475,10 +2491,24 @@ export default function App() {
         if (finalRate >= 300 && !newAchievements.includes('speed_demon')) {
             newAchievements.push('speed_demon');
             triggerSurprise('SPEED DEMON!');
+            addShiftNotification({
+                operator: shiftData.operator || 'USER',
+                category: 'milestone',
+                title: '🏆 Achievement Unlocked!',
+                message: 'You have become a SPEED DEMON!',
+                isRead: false
+            });
         }
         if (shiftData.totalCases + cases >= 1000 && !newAchievements.includes('millennium')) {
             newAchievements.push('millennium');
             triggerSurprise('MILLENNIUM CLUB!');
+            addShiftNotification({
+                operator: shiftData.operator || 'USER',
+                category: 'milestone',
+                title: '🏆 Achievement Unlocked!',
+                message: 'You have entered the MILLENNIUM CLUB!',
+                isRead: false
+            });
         }
         if (shiftData.history.filter((h: any) => isPickEntry(h)).length === 0 && !newAchievements.includes('early_bird')) {
             newAchievements.push('early_bird');
@@ -3888,11 +3918,26 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center gap-4">
-                    {failedUploads.length > 0 && !isOffline && (
-                        <div className="flex items-center gap-2 animate-pulse">
-                            <RefreshCcw size={10} className="text-sky-400 animate-spin" />
-                            <span className="text-[9px] font-black text-sky-400 uppercase tracking-widest font-mono">LOCAL_SYNC_ACTIVE</span>
-                        </div>
+                    {failedUploads.length > 0 && (
+                        <button 
+                            id="manual-sync-btn"
+                            onClick={() => {
+                                haptic('medium');
+                                if (navigator.onLine) {
+                                    showToast("Initiating manual cloud synchronization...", "info");
+                                    retryFailedUploads();
+                                } else {
+                                    showToast("Cannot sync: Device is offline. Reconnect to Wi-Fi first.", "warning");
+                                }
+                            }}
+                            className={`flex items-center gap-1.5 px-2 py-0.5 rounded bg-sky-500/10 border border-sky-500/20 text-sky-400 hover:bg-sky-500/20 hover:border-sky-400/40 transition-all cursor-pointer ${!isOffline && 'animate-pulse'}`}
+                            title={isOffline ? "Sync pending network connection" : "Click to force sync queued shifts now"}
+                        >
+                            <RefreshCcw size={8} className={`text-sky-400 ${!isOffline && 'animate-spin'}`} />
+                            <span className="text-[8px] font-black uppercase tracking-widest font-mono">
+                                {isOffline ? 'OFFLINE_PENDING' : 'SYNC_QUEUED'} ({failedUploads.length})
+                            </span>
+                        </button>
                     )}
                     <div className="flex items-center gap-2">
                         <Database size={10} className="text-slate-600" />
