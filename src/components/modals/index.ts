@@ -16,5 +16,7 @@ export * from './SettingsModal';
 export * from './HistoryLeaderboardOverlays';
 export * from './AppModalsContainer';
 export * from './BreakPolicyModal';
+export * from './MandatoryUpdateOverlay';
+export * from './MandatoryBetaFeedbackOverlay';
 
 

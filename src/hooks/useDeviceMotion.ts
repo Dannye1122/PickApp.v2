@@ -77,22 +77,25 @@ export function useDeviceMotion(
       stepState.current.baseline = (stepState.current.baseline * 0.99) + (mag * 0.01);
       stepState.current.movingAverage = (stepState.current.movingAverage * 0.72) + (mag * 0.28);
 
-      // Adaptive threshold calculation
+      // Determine magnitude and filter out gentle hand movements / scanner tilts
+      // Linear acceleration threshold raised to 2.2 m/s^2 (human heel strike / walking impulse)
+      // Gravity-relative threshold raised to 2.0 m/s^2 above resting baseline
       const dynamicThreshold = isLinear
-        ? 1.15 // 1.15 m/s^2 linear acceleration peak threshold
-        : Math.max(0.85, stepState.current.baseline * 0.08); // Gravity-relative threshold (~0.85 m/s^2 above baseline)
+        ? 2.2
+        : Math.max(2.0, stepState.current.baseline * 0.18);
 
       if (stepState.current.movingAverage > stepState.current.baseline + dynamicThreshold) {
         stepState.current.isPeak = true;
       }
 
       // Detect peak fall-off (foot strike completion)
-      if (stepState.current.isPeak && stepState.current.movingAverage < stepState.current.baseline + (dynamicThreshold * 0.35)) {
+      if (stepState.current.isPeak && stepState.current.movingAverage < stepState.current.baseline + (dynamicThreshold * 0.4)) {
         const currentTime = Date.now();
         const delta = currentTime - lastStepTime.current;
 
-        // Human walking cadence constraint: 250ms to 1400ms per step (~42-240 steps/min)
-        if (delta > 250 && delta < 1400) {
+        // Human walking cadence constraint: 380ms to 1200ms per step (~50-158 steps/min)
+        // Rejects jitter, vibrations, table tapping, and sudden fast wrist rotations
+        if (delta >= 380 && delta <= 1200) {
           lastStepTime.current = currentTime;
           stepState.current.isPeak = false;
 
@@ -103,7 +106,7 @@ export function useDeviceMotion(
           setShiftData((prev: any) => ({ ...prev, steps: nextBackup }));
 
           if (hapticEnabled) deviceHapticService('light');
-        } else if (delta >= 1400) {
+        } else if (delta > 1200) {
           // Reset peak state if time between strides exceeds walking window
           lastStepTime.current = currentTime;
           stepState.current.isPeak = false;

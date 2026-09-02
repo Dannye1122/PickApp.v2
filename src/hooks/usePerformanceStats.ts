@@ -3,6 +3,7 @@ import { ShiftData, WarehouseSettings } from '../types';
 import { calculateAislesExemptionDetail } from '../lib/exemptionUtils';
 import { DEPARTMENTS } from '../constants/data';
 import { isBreakEntry, isNoteEntry, isPickEntry } from '../utils/statsUtils';
+import { calculateEstimatedWeightKg, formatWeightTonnes } from '../constants/weightBaselines';
 
 const parseFormattedTimeToSeconds = (str: string): number => {
     if (!str || typeof str !== 'string') return 0;
@@ -398,6 +399,34 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         };
     }, [shiftData.isPicking, shiftData.pickStartTime, shiftData.caseCount, shiftData.isOnBreak, shiftData.breakStartTime, shiftData.breakTimeDuringCurrentPick, shiftData.zone, shiftData.department, shiftData.personalBests, rate, targetRate, now]);
 
+    // Physical workload, Tonnage & Tact Time calculation (v1.9.5)
+    const { totalWeightKg, weightTonnes, tactTimeSeconds } = useMemo(() => {
+        const deptArray = Object.entries(byDepartment).map(([dept, data]: [string, any]) => ({
+            dept,
+            cases: data?.cases || 0
+        }));
+        
+        // If no department history yet but totalCases > 0, fallback to current active department
+        if (deptArray.length === 0 && shiftData.totalCases > 0) {
+            deptArray.push({
+                dept: shiftData.department || 'ambient',
+                cases: shiftData.totalCases
+            });
+        }
+
+        const kg = calculateEstimatedWeightKg(deptArray, warehouseConfig?.customAvgCaseWeightKg);
+        const tonnesFormatted = formatWeightTonnes(kg);
+        const tact = shiftData.totalCases > 0 && activeElapsedSeconds > 0
+            ? parseFloat((activeElapsedSeconds / shiftData.totalCases).toFixed(1))
+            : 0;
+
+        return {
+            totalWeightKg: kg,
+            weightTonnes: tonnesFormatted,
+            tactTimeSeconds: tact
+        };
+    }, [byDepartment, shiftData.totalCases, shiftData.department, activeElapsedSeconds, warehouseConfig?.customAvgCaseWeightKg]);
+
     return {
         totalShiftSeconds,
         totalBreakSeconds,
@@ -423,6 +452,9 @@ export const usePerformanceStats = (shiftData: ShiftData, now: Date, targetRate:
         historicalAvg,
         isNewPb,
         personalBest,
-        byDepartment
+        byDepartment,
+        totalWeightKg,
+        weightTonnes,
+        tactTimeSeconds
     };
 };

@@ -1,27 +1,32 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
     Settings, X, LayoutDashboard, Trophy, Sliders, FileText, Lock, UserPlus, Sparkles, ChevronRight,
     Coffee, Zap, RefreshCcw, Hash, AlertCircle, BookOpen, Download, RotateCcw, Activity, Volume2,
     Bell, Mic, Power, ExternalLink, Shield, Clock, LogOut, Database, RefreshCw, XOctagon, HardDrive,
-    FileBox, ShieldCheck, Wrench, Layers, Trash2, FileSpreadsheet, Cpu, Terminal, Camera, ShieldAlert
+    FileBox, ShieldCheck, Wrench, Layers, Trash2, FileSpreadsheet, Cpu, Terminal, Camera, ShieldAlert,
+    Cloud, Check, Languages, VolumeX, HelpCircle, Award, CheckCircle2, Play
 } from 'lucide-react';
+import { auth } from '../../lib/firebase';
 import { APP_VERSION } from '../../constants/version';
 import { SKIN_REQUIREMENTS } from '../../constants/themes';
 import { DEPARTMENTS } from '../../constants/data';
+import { ITALIAN_LESSONS } from '../../constants/italianLessons';
+import { voiceService } from '../../services/voiceService';
 import { haptic } from '../../services/hapticService';
 import { deviceHaptic as deviceHapticService } from '../../lib/deviceApi';
 import { playGentleBeep, playAlertSound, playVictorySound } from '../../services/audioService';
 import { isNotificationSupported, setInactivityNotifsEnabled, sendInactivityNotification } from '../../services/notificationService';
 import { isVibrationSupported } from '../../services/hapticService';
+import { syncUserProfileToCloud, restoreUserProfileByUsername, fetchCloudUserProfile } from '../../services/authSyncService';
 import { ShiftData, UserProfile } from '../../types';
 
 interface SettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
     theme: any;
-    settingsTab: 'ops' | 'rate' | 'ui' | 'data' | 'vault';
-    setSettingsTab: (tab: 'ops' | 'rate' | 'ui' | 'data' | 'vault') => void;
+    settingsTab: 'ops' | 'rate' | 'ui' | 'data' | 'vault' | 'coach';
+    setSettingsTab: (tab: 'ops' | 'rate' | 'ui' | 'data' | 'vault' | 'coach') => void;
     userProfile: UserProfile | null;
     shiftData: ShiftData;
     setShiftData: React.Dispatch<React.SetStateAction<ShiftData>>;
@@ -141,6 +146,150 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setPinModal,
     setHapticsEnabled
 }) => {
+    const [cloudBackupStatus, setCloudBackupStatus] = useState<string | null>(null);
+    const [cloudRestoreLoading, setCloudRestoreLoading] = useState(false);
+    const [searchUsername, setSearchUsername] = useState(shiftData.operator || '');
+
+    // Italian Language Coach Settings
+    const [coachEnabled, setCoachEnabled] = useState<boolean>(() => {
+        return localStorage.getItem('italian_coach_enabled') === 'true';
+    });
+    const [coachLessonId, setCoachLessonId] = useState<number>(() => {
+        return parseInt(localStorage.getItem('italian_coach_lesson_id') || '1', 10);
+    });
+    const [coachIntervalMin, setCoachIntervalMin] = useState<number>(() => {
+        return parseInt(localStorage.getItem('italian_coach_interval_min') || '10', 10);
+    });
+    const [coachVolume, setCoachVolume] = useState<number>(() => {
+        return parseFloat(localStorage.getItem('italian_coach_volume') || '1.0');
+    });
+    const [coachRepCount, setCoachRepCount] = useState<number>(() => {
+        return parseInt(localStorage.getItem('italian_coach_rep_count') || '0', 10);
+    });
+
+    // Coach Panel UI Tab
+    const [coachActiveTab, setCoachActiveTab] = useState<'study' | 'quiz' | 'settings'>('study');
+    const [quizAnswers, setQuizAnswers] = useState<Record<number, number>>({});
+    const [quizSubmitted, setQuizSubmitted] = useState(false);
+    const [quizScore, setQuizScore] = useState<number | null>(null);
+    const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+
+    const activeCoachLesson = ITALIAN_LESSONS.find(l => l.id === coachLessonId) || ITALIAN_LESSONS[0];
+
+    const speakItalian = (text: string, englishTranslation?: string) => {
+        setIsPlayingAudio(true);
+        if (englishTranslation) {
+            voiceService.speakItalianVocab(text, englishTranslation, coachVolume, () => {
+                setIsPlayingAudio(false);
+            });
+        } else {
+            voiceService.speak(text, {
+                lang: 'it-IT',
+                rate: 0.85,
+                volume: coachVolume,
+                onEnd: () => setIsPlayingAudio(false)
+            });
+        }
+    };
+
+    const handleAddXP = (xpGained: number) => {
+        setShiftData((prev: any) => {
+            let newXp = (prev.xp || 0) + xpGained;
+            let newLevel = prev.level || 1;
+            const xpToLevel = newLevel * 1000;
+            if (newXp >= xpToLevel) {
+                newLevel += 1;
+                newXp -= xpToLevel;
+            }
+            return {
+                ...prev,
+                xp: newXp,
+                level: newLevel
+            };
+        });
+    };
+
+    const handleSubmitQuiz = () => {
+        let score = 0;
+        activeCoachLesson.quiz.forEach((q, idx) => {
+            if (quizAnswers[idx] === q.correctIndex) {
+                score += 1;
+            }
+        });
+        setQuizScore(score);
+        setQuizSubmitted(true);
+
+        if (score === activeCoachLesson.quiz.length) {
+            handleAddXP(150); // reward genuine XP
+            playVictorySound();
+            haptic('heavy');
+        } else {
+            playAlertSound();
+            haptic('medium');
+        }
+    };
+
+    const handleResetQuiz = () => {
+        setQuizAnswers({});
+        setQuizSubmitted(false);
+        setQuizScore(null);
+    };
+
+    // Save preferences
+    React.useEffect(() => {
+        localStorage.setItem('italian_coach_enabled', coachEnabled.toString());
+        localStorage.setItem('italian_coach_lesson_id', coachLessonId.toString());
+        localStorage.setItem('italian_coach_interval_min', coachIntervalMin.toString());
+        localStorage.setItem('italian_coach_volume', coachVolume.toString());
+        localStorage.setItem('italian_coach_rep_count', coachRepCount.toString());
+    }, [coachEnabled, coachLessonId, coachIntervalMin, coachVolume, coachRepCount]);
+
+    const handleBackupProfile = async () => {
+        if (!shiftData.operator) {
+            setCloudBackupStatus('Operator name required');
+            return;
+        }
+        setCloudRestoreLoading(true);
+        setCloudBackupStatus('Backing up profile to cloud...');
+        const success = await syncUserProfileToCloud(shiftData.operator, {
+            username: shiftData.operator,
+            level: userProfile?.level || 1,
+            xp: userProfile?.xp || 0,
+            currentWarehouseId: shiftData.warehouseId || 'MAIN',
+            unlockedSkins: userProfile?.unlockedSkins || [],
+            totalShiftsCompleted: mergedShiftSummaries.length
+        });
+        setCloudRestoreLoading(false);
+        if (success) {
+            haptic('heavy');
+            setCloudBackupStatus('✓ Profile backed up successfully to Cloud!');
+            setTimeout(() => setCloudBackupStatus(null), 4000);
+        } else {
+            setCloudBackupStatus('Cloud backup pending network connection');
+        }
+    };
+
+    const handleRestoreProfile = async () => {
+        if (!searchUsername.trim()) return;
+        setCloudRestoreLoading(true);
+        setCloudBackupStatus(`Searching profile for ${searchUsername.toUpperCase()}...`);
+        const found = await restoreUserProfileByUsername(searchUsername.trim());
+        setCloudRestoreLoading(false);
+        if (found) {
+            haptic('heavy');
+            setShiftData(prev => ({
+                ...prev,
+                operator: found.username,
+                warehouseId: found.currentWarehouseId || prev.warehouseId
+            }));
+            setCloudBackupStatus(`✓ Restored: Level ${found.level} (${found.xp} XP)`);
+            setTimeout(() => setCloudBackupStatus(null), 5000);
+        } else {
+            setCloudBackupStatus('No remote profile found for this username.');
+            setTimeout(() => setCloudBackupStatus(null), 4000);
+        }
+    };
+
     if (!isOpen) return null;
 
     return (
@@ -189,7 +338,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             { id: 'rate', icon: Trophy, label: 'GOALS' },
                             { id: 'ui', icon: Sliders, label: 'DEVICES' },
                             { id: 'data', icon: FileText, label: 'DATA' },
-                            { id: 'vault', icon: Lock, label: 'VAULT' }
+                            { id: 'vault', icon: Lock, label: 'VAULT' },
+                            ...((isUserAdmin() || auth.currentUser?.email === 'SERGHIE.DANIEL@gmail.com' || userProfile?.username?.toUpperCase() === 'DASERGHIE') ? [
+                                { id: 'coach', icon: Languages, label: 'COACH' }
+                            ] : [])
                         ].map(tab => {
                             const isActive = settingsTab === tab.id;
                             return (
@@ -822,6 +974,61 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     </button>
                                 </div>
 
+                                {/* MULTI-DEVICE CLOUD PROFILE BACKUP & RESTORE */}
+                                <div className="p-4 bg-slate-950 border border-indigo-500/30 rounded-2xl space-y-3.5 shadow-lg relative overflow-hidden">
+                                    <div className="flex items-center justify-between border-b border-slate-800/60 pb-2">
+                                        <div className="flex items-center gap-2.5">
+                                            <div className="p-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+                                                <Cloud size={16} />
+                                            </div>
+                                            <div>
+                                                <h4 className="text-[11px] font-black text-white uppercase tracking-widest">Cloud Profile Restore</h4>
+                                                <p className="text-[8px] text-indigo-400/80 font-black uppercase tracking-[0.2em]">Cross-Device Sync</p>
+                                            </div>
+                                        </div>
+                                        <span className="text-[8px] font-mono bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full font-bold">
+                                            Level {userProfile?.level || 1} • {userProfile?.xp || 0} XP
+                                        </span>
+                                    </div>
+
+                                    <p className="text-[9px] text-slate-400 leading-relaxed">
+                                        Switching scanners or using a new phone? Back up your unlocked themes, levels, and badges to Firebase, or restore from your username.
+                                    </p>
+
+                                    <div className="flex gap-2">
+                                        <input 
+                                            type="text"
+                                            value={searchUsername}
+                                            onChange={(e) => setSearchUsername(e.target.value)}
+                                            placeholder="OPERATOR NAME"
+                                            className="flex-1 bg-slate-900 border border-slate-800 text-white rounded-xl px-3 py-2 text-xs font-mono font-bold uppercase focus:outline-none focus:border-indigo-500"
+                                        />
+                                        <button
+                                            onClick={handleRestoreProfile}
+                                            disabled={cloudRestoreLoading || !searchUsername.trim()}
+                                            className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1.5 shrink-0"
+                                        >
+                                            <RefreshCw size={12} className={cloudRestoreLoading ? 'animate-spin' : ''} />
+                                            Restore
+                                        </button>
+                                    </div>
+
+                                    <button
+                                        onClick={handleBackupProfile}
+                                        disabled={cloudRestoreLoading}
+                                        className="w-full py-2.5 bg-slate-900 hover:bg-slate-850 border border-indigo-500/40 text-indigo-300 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+                                    >
+                                        <Cloud size={14} />
+                                        Back Up Current Profile to Cloud
+                                    </button>
+
+                                    {cloudBackupStatus && (
+                                        <div className="p-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-center text-[10px] font-mono text-indigo-300 font-bold">
+                                            {cloudBackupStatus}
+                                        </div>
+                                    )}
+                                </div>
+
                                 {/* DATABASE STORAGE STATISTICS & CAPACITY MANAGER */}
                                 <div className="bg-slate-950 border border-slate-800/80 rounded-2xl p-4 space-y-4 shadow-inner relative overflow-hidden">
                                     <div className="absolute top-0 right-0 w-32 h-32 bg-sky-500/5 blur-3xl rounded-full"></div>
@@ -1102,6 +1309,312 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                         </button>
                                     )}
                                 </div>
+                            </motion.div>
+                        )}
+                        {settingsTab === 'coach' && (
+                            <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
+                                {/* Coach Title Header */}
+                                <div className="p-5 bg-gradient-to-r from-emerald-950/40 via-slate-950 to-slate-950 border border-emerald-500/20 rounded-[32px] relative overflow-hidden">
+                                    <div className="absolute -top-12 -right-12 w-24 h-24 bg-emerald-500/5 blur-2xl rounded-full"></div>
+                                    <div className="flex justify-between items-start mb-3">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                                                <Languages size={20} />
+                                            </div>
+                                            <div>
+                                                <h4 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
+                                                    Italian Shift Coach
+                                                    <Sparkles size={12} className="text-emerald-400 animate-pulse" />
+                                                </h4>
+                                                <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">Acoustic Audio Learning</p>
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={() => {
+                                                setCoachEnabled(!coachEnabled);
+                                                haptic('medium');
+                                            }}
+                                            className={`px-3 py-1.5 rounded-xl font-extrabold text-[9px] tracking-widest transition-all border ${
+                                                coachEnabled 
+                                                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+                                                    : 'bg-slate-950 border-slate-800 text-slate-500'
+                                            }`}
+                                        >
+                                            {coachEnabled ? 'ENABLED' : 'MUTED'}
+                                        </button>
+                                    </div>
+                                    
+                                    <p className="text-[10px] text-slate-400 leading-relaxed font-bold uppercase tracking-tight pl-13">
+                                        Active unit: <span className="text-white italic">Unit {activeCoachLesson.id} - {activeCoachLesson.title}</span>. Micro-whisper prompts delivered straight to your headset during picking cycles.
+                                    </p>
+                                </div>
+
+                                {/* Headset Command Filtering Informational Banner */}
+                                <div className="p-3 bg-slate-950 border border-sky-500/20 rounded-2xl flex items-start gap-2.5">
+                                    <VolumeX size={14} className="text-sky-400 mt-0.5 shrink-0" />
+                                    <div>
+                                        <div className="text-[9px] font-black text-white uppercase tracking-wider">Acoustic Interference Shield</div>
+                                        <p className="text-[8px] text-slate-400 font-medium leading-relaxed mt-0.5">
+                                            System ignores headset control inputs like <span className="font-mono text-sky-400 font-bold">"1 ready", "2 ready", "ready", "say again"</span> to avoid interrupting active pick flows.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {/* Segmented Tab Controls */}
+                                <div className="grid grid-cols-3 gap-2 p-1 bg-slate-950 border border-slate-800/80 rounded-2xl">
+                                    {[
+                                        { id: 'study', label: 'Study' },
+                                        { id: 'quiz', label: 'Quiz' },
+                                        { id: 'settings', label: 'Intervals' }
+                                    ].map(tab => {
+                                        const isTabActive = coachActiveTab === tab.id;
+                                        return (
+                                            <button
+                                                key={tab.id}
+                                                onClick={() => {
+                                                    setCoachActiveTab(tab.id as any);
+                                                    haptic('light');
+                                                }}
+                                                className={`py-2 text-[9px] font-black uppercase tracking-widest rounded-xl transition-all ${
+                                                    isTabActive 
+                                                        ? 'bg-slate-900 border border-slate-800 text-white shadow-inner' 
+                                                        : 'text-slate-500 hover:text-slate-300'
+                                                }`}
+                                            >
+                                                {tab.label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+
+                                {/* SUB-TAB 1: STUDY */}
+                                {coachActiveTab === 'study' && (
+                                    <div className="space-y-4">
+                                        <div className="flex justify-between items-center px-1">
+                                            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Vocabulary • Unit {activeCoachLesson.id}</span>
+                                            <span className="text-[9px] font-black text-slate-400 bg-slate-950 px-2.5 py-0.5 rounded-full border border-slate-800/80 font-mono">
+                                                {activeCoachLesson.vocabulary.length} Words
+                                            </span>
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            {activeCoachLesson.vocabulary.map((vocab, vIdx) => (
+                                                <div 
+                                                    key={vocab.id}
+                                                    onClick={() => {
+                                                        speakItalian(vocab.italian, vocab.english);
+                                                        haptic('light');
+                                                    }}
+                                                    className="p-4 bg-slate-950 border border-slate-850 hover:border-slate-700/80 rounded-2xl flex items-center justify-between gap-4 cursor-pointer group transition-all duration-200"
+                                                >
+                                                    <div className="space-y-1">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-sm font-extrabold text-white group-hover:text-emerald-400 transition-colors">{vocab.italian}</span>
+                                                            <span className="text-[9px] font-mono text-slate-500 font-bold">[{vocab.phonetic}]</span>
+                                                        </div>
+                                                        <div className="text-[11px] text-slate-300 font-semibold">{vocab.english}</div>
+                                                        <div className="text-[9px] text-slate-500 font-medium italic mt-1 leading-normal">
+                                                            "{vocab.exampleItalian}" → "{vocab.exampleEnglish}"
+                                                        </div>
+                                                    </div>
+                                                    <div className="w-8 h-8 rounded-full bg-slate-900 flex items-center justify-center text-slate-600 group-hover:text-emerald-400 group-hover:bg-emerald-950/20 border border-slate-850 group-hover:border-emerald-500/30 transition-all">
+                                                        <Volume2 size={14} className={isPlayingAudio ? 'animate-pulse' : ''} />
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* SUB-TAB 2: QUIZ */}
+                                {coachActiveTab === 'quiz' && (
+                                    <div className="space-y-4">
+                                        <div className="flex justify-between items-center px-1">
+                                            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Unit {activeCoachLesson.id} Quiz</span>
+                                            {quizSubmitted && (
+                                                <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                                                    quizScore === activeCoachLesson.quiz.length 
+                                                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                                                        : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                                }`}>
+                                                    Score: {quizScore} / {activeCoachLesson.quiz.length}
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            {activeCoachLesson.quiz.map((q, qIdx) => (
+                                                <div key={qIdx} className="bg-slate-950 border border-slate-850 p-4 rounded-2xl space-y-2.5">
+                                                    <div className="text-[11px] font-bold text-slate-200">
+                                                        {qIdx + 1}. {q.question}
+                                                    </div>
+                                                    <div className="grid grid-cols-1 gap-1.5">
+                                                        {q.options.map((opt, optIdx) => {
+                                                            const isSelected = quizAnswers[qIdx] === optIdx;
+                                                            let optStyle = 'bg-slate-900 border-slate-850 text-slate-400 hover:bg-slate-800';
+
+                                                            if (quizSubmitted) {
+                                                                if (optIdx === q.correctIndex) {
+                                                                    optStyle = 'bg-emerald-950/50 border-emerald-500/40 text-emerald-300 font-bold';
+                                                                } else if (isSelected && optIdx !== q.correctIndex) {
+                                                                    optStyle = 'bg-rose-950/50 border-rose-500/40 text-rose-300';
+                                                                }
+                                                            } else if (isSelected) {
+                                                                optStyle = 'bg-emerald-600 border-emerald-400 text-white font-bold';
+                                                            }
+
+                                                            return (
+                                                                <button
+                                                                    key={optIdx}
+                                                                    disabled={quizSubmitted}
+                                                                    onClick={() => {
+                                                                        setQuizAnswers(prev => ({ ...prev, [qIdx]: optIdx }));
+                                                                        haptic('light');
+                                                                    }}
+                                                                    className={`p-2.5 rounded-xl text-left text-[11px] border transition-all ${optStyle}`}
+                                                                >
+                                                                    {opt}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                    {quizSubmitted && (
+                                                        <div className="text-[9px] text-slate-400 bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 mt-1">
+                                                            💡 {q.explanation}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        <div className="pt-2 flex justify-between items-center">
+                                            {quizSubmitted ? (
+                                                <button 
+                                                    onClick={() => {
+                                                        handleResetQuiz();
+                                                        haptic('medium');
+                                                    }}
+                                                    className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white border border-slate-800 font-black text-[10px] uppercase tracking-widest rounded-xl flex items-center justify-center gap-1.5"
+                                                >
+                                                    <RotateCcw size={14} />
+                                                    Retake Quiz
+                                                </button>
+                                            ) : (
+                                                <button 
+                                                    onClick={() => {
+                                                        handleSubmitQuiz();
+                                                    }}
+                                                    disabled={Object.keys(quizAnswers).length < activeCoachLesson.quiz.length}
+                                                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-black text-[10px] uppercase tracking-widest rounded-xl shadow-lg shadow-emerald-600/10 transition-all"
+                                                >
+                                                    Submit & Verify Answers (+150 XP)
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* SUB-TAB 3: SETTINGS & PRACTICE CALCULATION */}
+                                {coachActiveTab === 'settings' && (
+                                    <div className="space-y-4">
+                                        {/* Lesson Selector */}
+                                        <div className="space-y-2">
+                                            <label className="text-slate-500 font-black uppercase text-[9px] tracking-wider px-1">Active Lesson Unit</label>
+                                            <div className="space-y-2">
+                                                {ITALIAN_LESSONS.map(lesson => (
+                                                    <button
+                                                        key={lesson.id}
+                                                        onClick={() => {
+                                                            setCoachLessonId(lesson.id);
+                                                            handleResetQuiz();
+                                                            haptic('medium');
+                                                        }}
+                                                        className={`w-full p-4 rounded-2xl border text-left flex justify-between items-center transition-all ${
+                                                            coachLessonId === lesson.id 
+                                                                ? 'bg-emerald-950/40 border-emerald-500 text-white' 
+                                                                : 'bg-slate-950 border-slate-850 text-slate-400 hover:bg-slate-900'
+                                                        }`}
+                                                    >
+                                                        <div>
+                                                            <div className="font-extrabold text-[11px] text-white">Unit {lesson.id}: {lesson.title}</div>
+                                                            <div className="text-[9px] text-slate-500 mt-0.5">{lesson.theme} • {lesson.vocabulary.length} Words • {lesson.level}</div>
+                                                        </div>
+                                                        {coachLessonId === lesson.id && (
+                                                            <CheckCircle2 size={16} className="text-emerald-400" />
+                                                        )}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* Practice Repetition Statistics Card */}
+                                        <div className="bg-slate-950 p-4 rounded-2xl border border-slate-850 space-y-3.5 shadow-inner">
+                                            <div className="flex justify-between items-center border-b border-slate-900 pb-2">
+                                                <div className="flex items-center gap-1.5">
+                                                    <Clock size={14} className="text-emerald-400" />
+                                                    <span className="font-black text-slate-300 uppercase text-[9px] tracking-wider">Acoustic Repetition Engine</span>
+                                                </div>
+                                                <span className="text-emerald-400 font-mono font-black text-[11px]">
+                                                    Every {coachIntervalMin} minutes
+                                                </span>
+                                            </div>
+
+                                            <input 
+                                                type="range"
+                                                min="3"
+                                                max="30"
+                                                step="1"
+                                                value={coachIntervalMin}
+                                                onChange={(e) => {
+                                                    setCoachIntervalMin(parseInt(e.target.value, 10));
+                                                    haptic('light');
+                                                }}
+                                                className="w-full accent-emerald-500 cursor-pointer"
+                                            />
+                                            <div className="flex justify-between text-[8px] text-slate-500 font-mono uppercase tracking-wider">
+                                                <span>3 min (Max Reps)</span>
+                                                <span>15 min</span>
+                                                <span>30 min (Relaxed)</span>
+                                            </div>
+
+                                            {/* Repetition calculation tailored to the user's specific 5-7 hour shift duration */}
+                                            <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-850/60 text-[9.5px] text-slate-400 leading-normal space-y-1.5">
+                                                <div className="font-bold text-slate-300 uppercase text-[8px] tracking-widest text-emerald-400">Repetition Outlook For Your Shift:</div>
+                                                <p>
+                                                    • Over a <strong>5-hour shift</strong>: approx <strong className="text-white font-mono">{Math.round(300 / coachIntervalMin)} vocabulary iterations</strong>.
+                                                </p>
+                                                <p>
+                                                    • Over a <strong>7-hour shift</strong>: approx <strong className="text-white font-mono">{Math.round(420 / coachIntervalMin)} vocabulary iterations</strong>.
+                                                </p>
+                                                <p className="text-slate-500 text-[8px] italic uppercase mt-1">
+                                                    Highly repetitive cycles help reinforce speech recognition pathways automatically while picking!
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {/* Audio Volume Controls */}
+                                        <div className="bg-slate-950 p-4 rounded-2xl border border-slate-850 space-y-3 shadow-inner">
+                                            <div className="flex justify-between items-center">
+                                                <span className="font-black text-slate-300 uppercase text-[9px] tracking-wider">Whisper Voice Volume</span>
+                                                <span className="text-emerald-400 font-mono font-black text-[10px]">
+                                                    {Math.round(coachVolume * 100)}%
+                                                </span>
+                                            </div>
+                                            <input 
+                                                type="range"
+                                                min="0.1"
+                                                max="1.0"
+                                                step="0.05"
+                                                value={coachVolume}
+                                                onChange={(e) => {
+                                                    setCoachVolume(parseFloat(e.target.value));
+                                                    haptic('light');
+                                                }}
+                                                className="w-full accent-emerald-500 cursor-pointer"
+                                            />
+                                        </div>
+                                    </div>
+                                )}
                             </motion.div>
                         )}
                         {/* Admin settings tab removed - completely migrated to dedicated Admin page screen */}

@@ -63,8 +63,12 @@ import { PickingDashboardMain } from './components/PickingDashboardMain';
 import { 
     AppModalsContainer,
     SettingsModal,
-    HistoryLeaderboardOverlays
+    HistoryLeaderboardOverlays,
+    MandatoryUpdateOverlay,
+    MandatoryBetaFeedbackOverlay
 } from './components/modals';
+import { ItalianCoachModal } from './components/modals/ItalianCoachModal';
+import { isWorkHeadsetPhrase } from './constants/italianLessons';
 import { ShiftData, ThemeColors, LeaderboardEntry, UserRole, UserProfile, WarehouseSettings, ShiftNotification, InteractionType } from './types';
 import { THEMES, SKIN_REQUIREMENTS } from './constants/themes';
 import { USERS, DEPT_LANES, DEPARTMENTS, ACHIEVEMENT_DATA, DUO_MESSAGES, getUserHomeDepartment } from './constants/data';
@@ -85,6 +89,10 @@ import { Logo, Catchphrase } from './components/branding/Logo';
 import { MetricCard } from './components/stats/MetricCard';
 
 import { fetchWarehouseConfig, saveWarehouseConfig } from './services/warehouseService';
+import { initRemoteConfig, WarehouseRemoteConfig } from './services/remoteConfigService';
+import { uploadShiftReceiptToCloud, uploadLabelImageToCloud } from './services/cloudStorageService';
+import { BroadcastBanner } from './components/BroadcastBanner';
+import { voiceService } from './services/voiceService';
 
 
 
@@ -128,6 +136,7 @@ export default function App() {
     } = useAuth();
 
     const [updating, setUpdating] = useState(false);
+    const [showItalianCoach, setShowItalianCoach] = useState(false);
     const [showCelebration, setShowCelebration] = useState(false);
     const [celebrationTitle, setCelebrationTitle] = useState('TARGET SMASHED!');
     const [celebrationSubtitle, setCelebrationSubtitle] = useState('You are absolute machine!');
@@ -161,7 +170,7 @@ export default function App() {
     const isUserAdmin = () => {
         if (userProfile?.role === UserRole.ADMIN) return true;
         const currentName = (shiftData?.operator || username || localStorage.getItem('lastUser') || '').toUpperCase().trim();
-        return currentName === 'ADMIN' || currentName === 'DASERGHIE';
+        return currentName === 'ADMIN' || currentName === 'DASERGHIE' || firebaseUser?.email === 'SERGHIE.DANIEL@gmail.com';
     };
 
     const isAdminUser = (name?: string) => {
@@ -201,6 +210,20 @@ export default function App() {
 
     const [currentWarehouseId, setCurrentWarehouseId] = useState('MAIN');
     const [warehouseConfig, setWarehouseConfig] = useState<WarehouseSettings | null>(null);
+    const [remoteConfig, setRemoteConfig] = useState<WarehouseRemoteConfig | null>(null);
+    const [floorBroadcast, setFloorBroadcast] = useState<string>('');
+
+    useEffect(() => {
+        // Fetch Remote Config parameters from Firebase
+        initRemoteConfig().then((cfg) => {
+            setRemoteConfig(cfg);
+            if (cfg.broadcastBanner) {
+                setFloorBroadcast(cfg.broadcastBanner);
+            }
+        }).catch((err) => {
+            console.warn('RemoteConfig initialization failed:', err);
+        });
+    }, []);
 
     useEffect(() => {
         // subscribeToWarehouseContext is typically a local state synchronization in this app, 
@@ -306,7 +329,7 @@ export default function App() {
         const saved = localStorage.getItem(`pending_order_${lastUser}`);
         return saved ? JSON.parse(saved) : null;
     });
-    const [settingsTab, setSettingsTab] = useState<'ops' | 'rate' | 'ui' | 'updates' | 'data' | 'vault'>('ops');
+    const [settingsTab, setSettingsTab] = useState<'ops' | 'rate' | 'ui' | 'updates' | 'data' | 'vault' | 'coach'>('ops');
     const [newUserName, setNewUserName] = useState('');
     const [newUserPin, setNewUserPin] = useState('');
     const [adminUsersDb, setAdminUsersDb] = useState<any[] | null>(null);
@@ -1537,6 +1560,63 @@ export default function App() {
         };
     }, [isAuthenticated, firebaseUser?.uid, shiftData.warehouseId, fetchLeaderboardManual, fetchSummariesManual, fetchWarehouseConfigManual, fetchAdminSummariesManual]);
 
+    // Background Italian Coach loop for Admins during shift
+    useEffect(() => {
+        if (!isAuthenticated || !isUserAdmin()) return;
+
+        const checkIntervalAndAnnounce = () => {
+            const isEnabled = localStorage.getItem('italian_coach_enabled') === 'true';
+            if (!isEnabled) return;
+
+            // Only play during active shifts to avoid disturbing user outside shift hours
+            if (!shiftData.firstStartTime || shiftData.isShiftFinalized) return;
+
+            const intervalMinutes = parseInt(localStorage.getItem('italian_coach_interval_min') || '10', 10);
+            const nowTime = Date.now();
+            const lastAnnouncedRaw = localStorage.getItem('italian_coach_last_announced_timestamp');
+            const lastAnnounced = lastAnnouncedRaw ? parseInt(lastAnnouncedRaw, 10) : 0;
+
+            if (nowTime - lastAnnounced >= intervalMinutes * 60 * 1000) {
+                // Time to announce!
+                const selectedLessonId = parseInt(localStorage.getItem('italian_coach_lesson_id') || '1', 10);
+                import('./constants/italianLessons').then(({ ITALIAN_LESSONS }) => {
+                    const lesson = ITALIAN_LESSONS.find(l => l.id === selectedLessonId) || ITALIAN_LESSONS[0];
+                    const currentIndex = parseInt(localStorage.getItem('italian_coach_vocab_index') || '0', 10);
+                    const vocabItem = lesson.vocabulary[currentIndex];
+
+                    if (vocabItem) {
+                        // Announce vocab item
+                        const volume = parseFloat(localStorage.getItem('italian_coach_volume') || '1.0');
+                        voiceService.speakItalianVocab(vocabItem.italian, vocabItem.english, volume);
+
+                        // Notify user in system UI
+                        showToast(`🇮🇹 Italian Coach: "${vocabItem.italian}" - ${vocabItem.english}`, 'info');
+
+                        // Increment repetition & round-robin vocab index
+                        const nextIndex = (currentIndex + 1) % lesson.vocabulary.length;
+                        localStorage.setItem('italian_coach_vocab_index', nextIndex.toString());
+                        
+                        const repCount = parseInt(localStorage.getItem('italian_coach_rep_count') || '0', 10);
+                        localStorage.setItem('italian_coach_rep_count', (repCount + 1).toString());
+                    }
+
+                    // Save last announced timestamp
+                    localStorage.setItem('italian_coach_last_announced_timestamp', nowTime.toString());
+                }).catch(err => console.warn('Failed to load Italian lessons dynamically:', err));
+            }
+        };
+
+        // If no timestamp set yet, seed it with current time so it doesn't blast immediately upon login,
+        // unless they've already been logged in for a while.
+        if (!localStorage.getItem('italian_coach_last_announced_timestamp')) {
+            localStorage.setItem('italian_coach_last_announced_timestamp', Date.now().toString());
+        }
+
+        // Run check every 30 seconds
+        const checkTimer = setInterval(checkIntervalAndAnnounce, 30000);
+        return () => clearInterval(checkTimer);
+    }, [isAuthenticated, shiftData.firstStartTime, shiftData.isShiftFinalized, userProfile]);
+
     // Peer Social Interactions Subscription (Pokes, Cheers, Kudos, Banter)
     useEffect(() => {
         const targetOp = (shiftData.operator || userProfile?.username || '').toUpperCase().trim();
@@ -2522,6 +2602,10 @@ export default function App() {
         if (entry.labelImages && entry.labelImages.length > 0) {
             const opName = shiftData.operator || "Unknown";
             const shiftDateStr = getLocalDateString(new Date(shiftStart));
+            for (let i = 0; i < entry.labelImages.length; i++) {
+                const img = entry.labelImages[i];
+                uploadLabelImageToCloud(img, opName, `order_${i + 1}`).catch(e => console.warn('Cloud storage label upload fallback:', e));
+            }
             import('./services/indexedDbService').then(({ saveLocalPhoto }) => {
                 for (let i = 0; i < entry.labelImages.length; i++) {
                     const img = entry.labelImages[i];
@@ -2691,6 +2775,9 @@ export default function App() {
     };
 
     const handleVoiceCommand = (command: string, value?: number) => {
+        if (isWorkHeadsetPhrase(command)) {
+            return; // ignore work headset interference phrases
+        }
         if (command === 'next') {
             // Generate a simulated WMS task
             const aisle = Math.floor(Math.random() * 50) + 1;
@@ -2983,6 +3070,12 @@ export default function App() {
                     };
 
                     // Master Shift Finalization via ShiftDataService (v1.8.0)
+                    if (screenshotData) {
+                        tasks.push(
+                            uploadShiftReceiptToCloud(screenshotData, currentName, logDate)
+                                .catch(err => console.warn('Cloud storage shift receipt backup fallback:', err))
+                        );
+                    }
                     tasks.push(
                         shiftDataService.finalizeShift(
                             newSummaryObject, 
@@ -3313,171 +3406,29 @@ export default function App() {
 
     return (
         <div id="app-container" {...handlers} className={`fixed inset-0 bg-slate-950 text-white flex flex-col ${theme.font} overflow-hidden select-none pt-safe-top pb-safe-bottom`}>
-            {isAppBlocked && (
-                <div className="fixed inset-0 z-[1000] bg-slate-950 flex flex-col items-center justify-center p-6 text-center overflow-y-auto pt-safe-top pb-safe-bottom">
-                    <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative">
-                        <div className="absolute top-4 left-4 flex gap-1">
-                            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
-                        </div>
-                        <ShieldAlert size={56} className="text-amber-400 mx-auto mb-4" />
-                        <h2 className="text-xl font-black text-white italic tracking-tighter uppercase mb-1">Update Mandatory</h2>
-                        <div className="inline-block px-3 py-1 bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] font-black uppercase rounded-full mb-4">
-                            System v{APP_VERSION} ➔ v{minAllowedVersion}
-                        </div>
-                        
-                        <p className="text-slate-400 text-xs mb-5 leading-relaxed">
-                            A newer version of PickApp is required for safe operation and synchronization with the warehouse database.
-                        </p>
+            <MandatoryUpdateOverlay 
+                isAppBlocked={isAppBlocked}
+                minAllowedVersion={minAllowedVersion}
+                availableUpdate={availableUpdate}
+                consentUpdate={consentUpdate}
+                setConsentUpdate={setConsentUpdate}
+                updating={updating}
+                handleUpdateApp={handleUpdateApp}
+            />
 
-                        {availableUpdate && availableUpdate.notes && availableUpdate.notes.length > 0 && (
-                            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 text-left mb-6 space-y-2.5">
-                                <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider">What's New in v{availableUpdate.version}:</span>
-                                <ul className="space-y-1.5 pt-0.5">
-                                    {availableUpdate.notes.map((note, idx) => (
-                                        <li key={idx} className="text-[11px] text-slate-300 flex items-start gap-2">
-                                            <span className="text-amber-500 select-none font-bold">▪</span>
-                                            <span>{note}</span>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </div>
-                        )}
+            <MandatoryBetaFeedbackOverlay 
+                requiresBetaFeedback={requiresBetaFeedback}
+                betaFeedbackData={betaFeedbackData}
+                setBetaFeedbackData={setBetaFeedbackData}
+                submittingBetaFeedback={submittingBetaFeedback}
+                handleSubmitBetaFeedback={handleSubmitBetaFeedback}
+            />
 
-                        <div className="bg-slate-950/45 p-3.5 border border-slate-800/40 rounded-2xl mb-6">
-                            <label className="flex items-start gap-3 text-left text-slate-300 cursor-pointer select-none">
-                                <input 
-                                    type="checkbox" 
-                                    className="mt-1 w-4 h-4 rounded border-slate-700 bg-slate-800 text-amber-500 focus:ring-0 cursor-pointer"
-                                    checked={consentUpdate} 
-                                    onChange={(e) => setConsentUpdate(e.target.checked)} 
-                                />
-                                <span className="text-[11px] font-medium leading-normal text-slate-400">
-                                    I consent to update and understand I must reload to obtain the newest PickApp build.
-                                </span>
-                            </label>
-                        </div>
-
-                        <button 
-                            disabled={!consentUpdate || updating}
-                            onClick={async () => {
-                                if (availableUpdate) {
-                                    await handleUpdateApp();
-                                } else {
-                                    window.location.reload();
-                                }
-                            }}
-                            className={`w-full py-4 rounded-xl font-black uppercase text-xs tracking-wider transition-all flex items-center justify-center gap-2 ${
-                                consentUpdate && !updating 
-                                ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-lg shadow-amber-500/20 active:scale-[0.98]' 
-                                : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                            }`}
-                        >
-                            {updating ? <RefreshCcw size={16} className="animate-spin" /> : null}
-                            <span>{updating ? 'INSTALLING UPDATE...' : 'APPROVE & INSTALL UPDATE'}</span>
-                        </button>
-                    </div>
-                </div>
-            )}
-            {requiresBetaFeedback && (
-                <div className="fixed inset-0 z-[1000] bg-slate-950 flex flex-col items-center justify-start p-4 text-center overflow-y-auto pt-safe-top pb-safe-bottom">
-                    <div className="max-w-md w-full bg-slate-900 border border-emerald-500/50 rounded-3xl p-6 shadow-2xl relative my-auto">
-                        <div className="absolute top-4 left-4 flex gap-1">
-                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                        </div>
-                        <ClipboardCheck size={56} className="text-emerald-400 mx-auto mb-4" />
-                        <h2 className="text-xl font-black text-white italic tracking-tighter uppercase mb-1">14-Shift Milestone</h2>
-                        <div className="inline-block px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-black uppercase rounded-full mb-6">
-                            Mandatory Beta Log
-                        </div>
-                        
-                        <p className="text-slate-300 text-xs mb-6 leading-relaxed">
-                            You have completed 14 shifts in the PickApp pilot program. Please submit your operational feedback to permanently unlock the dashboard.
-                        </p>
-
-                        <div className="space-y-6 text-left">
-                            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">UI/UX Ergonomics</label>
-                                <p className="text-[10px] text-slate-500 mb-3">How easy was it to tap buttons and read data while moving or wearing gloves?</p>
-                                <div className="flex justify-between gap-2">
-                                    {[1, 2, 3, 4, 5].map((star) => (
-                                        <button 
-                                            key={star}
-                                            onClick={() => setBetaFeedbackData({...betaFeedbackData, ergonomics: star})}
-                                            className={`flex-1 py-2 rounded-lg border text-sm font-bold transition-all ${
-                                                betaFeedbackData.ergonomics === star 
-                                                ? 'bg-emerald-500 border-emerald-500 text-white shadow-lg shadow-emerald-500/20' 
-                                                : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-750'
-                                            }`}
-                                        >
-                                            {star}★
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Network Resilience</label>
-                                <p className="text-[10px] text-slate-500 mb-3">During Wi-Fi dead zones, did the app crash or preserve data?</p>
-                                <div className="space-y-2">
-                                    {['Flawless (No data lost)', 'Lagged but recovered', 'Crashed/Lost data'].map((opt) => (
-                                        <button 
-                                            key={opt}
-                                            onClick={() => setBetaFeedbackData({...betaFeedbackData, resilience: opt})}
-                                            className={`w-full py-2.5 px-3 rounded-lg border text-xs font-bold transition-all text-left ${
-                                                betaFeedbackData.resilience === opt 
-                                                ? 'bg-sky-500/20 border-sky-500 text-sky-400' 
-                                                : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-750'
-                                            }`}
-                                        >
-                                            <div className="flex items-center gap-2">
-                                                <div className={`w-3 h-3 rounded-full border ${betaFeedbackData.resilience === opt ? 'bg-sky-500 border-sky-400' : 'border-slate-600'}`} />
-                                                {opt}
-                                            </div>
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Motivation Impact</label>
-                                <p className="text-[10px] text-slate-500 mb-2">Did Live-Pace & Stretch Goals push you faster? {betaFeedbackData.motivation}/5</p>
-                                <input 
-                                    type="range" min="1" max="5" step="1"
-                                    value={betaFeedbackData.motivation}
-                                    onChange={(e) => setBetaFeedbackData({...betaFeedbackData, motivation: parseInt(e.target.value)})}
-                                    className="w-full accent-emerald-500"
-                                />
-                                <div className="flex justify-between text-[9px] text-slate-500 mt-1 font-bold uppercase">
-                                    <span>Distracting</span>
-                                    <span>Highly Motivating</span>
-                                </div>
-                            </div>
-
-                            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Qualitative Notes (Optional)</label>
-                                <textarea 
-                                    placeholder="Any workflow friction or suggestions..."
-                                    value={betaFeedbackData.notes}
-                                    onChange={(e) => setBetaFeedbackData({...betaFeedbackData, notes: e.target.value})}
-                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-xs text-white placeholder:text-slate-500 outline-none focus:border-emerald-500 min-h-[80px]"
-                                />
-                            </div>
-                        </div>
-
-                        <button 
-                            disabled={submittingBetaFeedback || !betaFeedbackData.ergonomics || !betaFeedbackData.resilience}
-                            onClick={handleSubmitBetaFeedback}
-                            className={`w-full mt-6 py-4 rounded-xl font-black uppercase text-xs tracking-wider transition-all flex items-center justify-center gap-2 ${
-                                (betaFeedbackData.ergonomics && betaFeedbackData.resilience && !submittingBetaFeedback)
-                                ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-[0.98]' 
-                                : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                            }`}
-                        >
-                            {submittingBetaFeedback ? <RefreshCcw size={16} className="animate-spin" /> : null}
-                            <span>{submittingBetaFeedback ? 'SUBMITTING...' : 'SUBMIT LOG & UNLOCK'}</span>
-                        </button>
-                    </div>
-                </div>
+            {floorBroadcast && (
+                <BroadcastBanner 
+                    message={floorBroadcast} 
+                    onDismiss={() => setFloorBroadcast('')} 
+                />
             )}
 
             <div className="relative z-20 shrink-0 pt-safe-top px-4 pb-3 flex justify-center gap-3 bg-slate-950/40 backdrop-blur-[4px] border-b border-slate-900">

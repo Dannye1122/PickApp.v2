@@ -1,9 +1,10 @@
 import React from 'react';
-import { CheckCircle, Flame, Sparkles, Share, Download, FileText } from 'lucide-react';
+import { CheckCircle, Flame, Sparkles, Share, Download, FileText, Scale } from 'lucide-react';
 import { formatHHMM, formatTime } from '../../utils/formatUtils';
 import { getDepartmentBreakdown } from '../../utils/statsUtils';
 import { calculateAislesExemptionDetail } from '../../lib/exemptionUtils';
 import { haptic } from '../../services/hapticService';
+import { calculateEstimatedWeightKg, formatWeightTonnes } from '../../constants/weightBaselines';
 
 interface ShiftSummaryModalProps {
     isOpen: boolean;
@@ -93,6 +94,28 @@ export const ShiftSummaryModal: React.FC<ShiftSummaryModalProps> = ({
                         <span className="text-slate-400 text-sm font-medium">Shift Time</span>
                         <span className="text-white font-bold text-lg">{formatHHMM(isShiftFinalized ? (finalizedStats?.activeElapsedSeconds || 0) : activeElapsedSeconds)}</span>
                     </div>
+                    {(() => {
+                        const deptBreakdown = getDepartmentBreakdown(shiftData.history);
+                        const deptItems = deptBreakdown.map((d: any) => ({ dept: d.department || '', cases: d.cases || 0 }));
+                        const totalCasesCount = isShiftFinalized ? (finalizedStats?.cases || shiftData.totalCases) : shiftData.totalCases;
+                        if (deptItems.length === 0 && totalCasesCount > 0) {
+                            deptItems.push({ dept: shiftData.department || 'ambient', cases: totalCasesCount });
+                        }
+                        const kg = calculateEstimatedWeightKg(deptItems);
+                        const weightObj = formatWeightTonnes(kg);
+                        if (kg <= 0) return null;
+                        return (
+                            <div className="flex justify-between items-center border-t border-slate-800/50 pt-2">
+                                <span className="text-slate-400 text-sm font-medium flex items-center gap-1.5">
+                                    <Scale size={14} className="text-amber-400" />
+                                    Estimated Workload
+                                </span>
+                                <span className="text-amber-300 font-extrabold text-base font-mono">
+                                    {weightObj.value} {weightObj.unit}
+                                </span>
+                            </div>
+                        );
+                    })()}
                     <div className="flex justify-between items-center border-t border-slate-800/50 pt-2">
                         <span className="text-slate-400 text-sm font-medium">Break / Idle Duration</span>
                         <div className="text-right">

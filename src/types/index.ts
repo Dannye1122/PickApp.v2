@@ -70,6 +70,7 @@ export interface WarehouseSettings {
     customDeptTargets?: {
         [deptId: string]: number;
     };
+    customAvgCaseWeightKg?: number;
 }
 
 export interface ShiftData {
