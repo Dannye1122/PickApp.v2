@@ -353,12 +353,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                         <div className={`w-8 h-8 rounded-xl ${theme.bg} flex items-center justify-center text-white`}>
                                             <Sparkles size={16} />
                                         </div>
-                                        <span className="text-[11px] font-black text-slate-200 uppercase tracking-widest">Logic: {isAisles ? 'Aisles Linear' : '3-Min Offset'}</span>
+                                        <span className="text-[11px] font-black text-slate-200 uppercase tracking-widest">Logic: Standard Active Rate</span>
                                     </div>
                                     <p className="text-[10px] text-slate-500 leading-relaxed font-bold uppercase tracking-tight pl-11">
-                                        {isAisles 
-                                            ? "45m dynamic buffering distributed across shift rotation."
-                                            : "180s gap insulation applied to inter-order transitions."}
+                                        100% break exclusion applied consistently across all departments.
                                     </p>
                                 </div>
 
