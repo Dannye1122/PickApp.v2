@@ -399,7 +399,12 @@ export default function App() {
         setEditingOrderIndex(null);
         setEditingOrderLabel('');
         try {
-            await saveShiftSummary(updated);
+            // Save to IndexedDB and Firestore
+            await shiftDataService.finalizeShift(updated);
+            // Update in-memory shift cache
+            const rec = shiftCacheService.convertSummaryToShiftRecord(updated);
+            shiftCacheService.setCachedShift(rec);
+            showToast("Order label updated & saved locally.", "success");
         } catch (e) {
             console.warn('Failed to persist updated order label:', e);
         }
@@ -2612,16 +2617,8 @@ export default function App() {
         };
 
 
-        // For local storage, keep images only for the recent entries to prevent QuotaExceededError (5MB limit)
-        const cleanedHistory = (shiftData.history || []).map((entry: any, index: number) => {
-            if (index >= 8) { // Only keep images for the last ~8 orders
-                const { labelImages, labelImage, ...rest } = entry;
-                return rest;
-            }
-            return entry;
-        });
-
-        const newHistory = [newHistoryEntry, ...cleanedHistory];
+        // Retain full history entries including labels and photos
+        const newHistory = [newHistoryEntry, ...(shiftData.history || [])];
 
         updateShiftData({
             totalCases: shiftData.totalCases + cases,
@@ -3178,6 +3175,38 @@ export default function App() {
                         notes: shiftData.operatorNote || shiftNotes
                     };
 
+                    // Gather all label photos from every order in history plus main shift label
+                    const allFinalPhotos: Array<{ photoId: string; blob: string; orderIndex: number; type: 'label' }> = [];
+                    let photoSeq = 0;
+                    if (shiftData.history && shiftData.history.length > 0) {
+                        shiftData.history.forEach((h: any, orderIdx: number) => {
+                            const imgs = [
+                                ...(h.labelImages || []),
+                                ...(h.labelImage ? [h.labelImage] : [])
+                            ];
+                            imgs.forEach((img: string) => {
+                                if (img) {
+                                    allFinalPhotos.push({
+                                        photoId: `photo_${logDate}_order_${orderIdx + 1}_${photoSeq++}`,
+                                        blob: img,
+                                        orderIndex: orderIdx + 1,
+                                        type: 'label'
+                                    });
+                                }
+                            });
+                        });
+                    }
+                    pendingLabelImages.forEach((img, i) => {
+                        if (img) {
+                            allFinalPhotos.push({
+                                photoId: `photo_${logDate}_main_${i}`,
+                                blob: img,
+                                orderIndex: 0,
+                                type: 'label'
+                            });
+                        }
+                    });
+
                     // Master Shift Finalization via ShiftDataService (v1.8.0)
                     if (screenshotData) {
                         tasks.push(
@@ -3188,21 +3217,16 @@ export default function App() {
                     tasks.push(
                         shiftDataService.finalizeShift(
                             newSummaryObject, 
-                            pendingLabelImages.map((img, i) => ({
-                                photoId: `photo_${logDate}_main_${i}`,
-                                blob: img,
-                                orderIndex: i,
-                                type: 'label' as const
-                            }))
+                            allFinalPhotos
                         ).then((result) => {
                             if (result.success) {
-                                showToast("Shift Summary and Pick Report successfully synced to Firestore.", "success");
+                                showToast("Shift Summary & all label photos saved locally & synced.", "success");
                             } else {
-                                showToast("Error syncing shift to database.", "error");
+                                showToast("Shift saved locally in offline vault.", "info");
                             }
                         }).catch(e => {
                             console.warn("Shift and media sync fallback:", e);
-                            showToast("Shift stored locally. Cloud sync pending.", "info");
+                            showToast("Shift stored in local vault. Cloud sync pending.", "info");
                         })
                     );
 

@@ -159,8 +159,31 @@ class ShiftCacheService {
     }
 
     const monthStr = month.toString().padStart(2, '0');
+    const targetMonthPrefix = `${year}-${monthStr}`;
     const shiftsMap = new Map<string, ShiftRecord>();
 
+    // 2. Load from local IndexedDB first (Instant & Quota-Proof)
+    try {
+      const { getAllLocalItems, STORES } = await import('./indexedDbService');
+      const localItems = await getAllLocalItems<any>(STORES.SHIFT_HISTORY, 'userName', currentName);
+      if (localItems && localItems.length > 0) {
+        localItems.forEach((item: any) => {
+          if (!item) return;
+          const normDate = normalizeDateKey(item.date || item.clockInTime);
+          if (normDate.startsWith(targetMonthPrefix)) {
+            const record = this.convertSummaryToShiftRecord(item, item.id || `${currentName}_${normDate}`);
+            const existing = shiftsMap.get(normDate);
+            if (!existing || (record.totalCases || 0) >= (existing.totalCases || 0)) {
+              shiftsMap.set(normDate, record);
+            }
+          }
+        });
+      }
+    } catch (idbErr) {
+      console.warn('IndexedDB getMonthShifts error:', idbErr);
+    }
+
+    // 3. Augment with Firestore if network/quota available
     try {
       const nameVariants = Array.from(new Set([
         currentName,
@@ -168,7 +191,6 @@ class ShiftCacheService {
         currentName.charAt(0).toUpperCase() + currentName.slice(1).toLowerCase()
       ]));
 
-      // Query shift_summaries collection by userName only to avoid requiring Firestore composite indexes
       const q = query(
         collection(db, 'shift_summaries'),
         where('userName', 'in', nameVariants.slice(0, 10))
@@ -177,8 +199,8 @@ class ShiftCacheService {
       const snapshot = await getDocs(q);
       snapshot.forEach(docSnap => {
         const data = docSnap.data() as ShiftSummary;
-        const normDate = normalizeDateKey(data.date);
-        if (normDate.startsWith(`${year}-${monthStr}`)) {
+        const normDate = normalizeDateKey(data.date || data.clockInTime);
+        if (normDate.startsWith(targetMonthPrefix)) {
           const record = this.convertSummaryToShiftRecord(data, docSnap.id);
           const existing = shiftsMap.get(normDate);
           if (!existing || (record.totalCases || 0) >= (existing.totalCases || 0)) {
@@ -187,7 +209,7 @@ class ShiftCacheService {
         }
       });
     } catch (e) {
-      console.warn('Firestore getMonthShifts query error:', e);
+      // Ignore Firestore quota / offline errors - local data already loaded
     }
 
     const result = Array.from(shiftsMap.values()).sort((a, b) => b.date.localeCompare(a.date));
@@ -285,7 +307,6 @@ class ShiftCacheService {
       }
 
       const photoId = p.photoId || `photo_${normDate}_${safeUser}_${i}_${Date.now()}`;
-      const photoDocRef = doc(db, 'shift_photos', photoId);
 
       const record: ShiftPhotoRecord = {
         photoId,
@@ -296,15 +317,33 @@ class ShiftCacheService {
         type: p.type || 'label'
       };
 
+      // 1. Save directly to IndexedDB FIRST
       try {
+        await saveLocalItem(STORES.LABEL_PHOTOS, {
+          id: photoId,
+          userName: safeUser,
+          date: normDate,
+          blob: compressedBlob,
+          orderIndex: p.orderIndex ?? i,
+          type: p.type || 'label',
+          createdAt: Date.now()
+        });
+      } catch (idbErr) {
+        console.warn('IndexedDB photo save failed:', idbErr);
+      }
+
+      // 2. Save to Firestore in background
+      try {
+        const photoDocRef = doc(db, 'shift_photos', photoId);
         await setDoc(photoDocRef, {
           ...record,
           createdAt: serverTimestamp()
         }, { merge: true });
-        savedRecords.push(record);
       } catch (err) {
-        console.warn('Failed saving photo to Firestore:', err);
+        console.warn('Firestore photo backup failed:', err);
       }
+
+      savedRecords.push(record);
     }
 
     // Update in-memory photo cache
@@ -314,7 +353,7 @@ class ShiftCacheService {
   }
 
   /**
-   * Lazy-load photos for a specific shift on demand from Firestore
+   * Load photos for a specific shift directly from local IndexedDB first, with cloud augmentation
    */
   public async getShiftPhotos(shiftDate: string, userName?: string): Promise<ShiftPhotoRecord[]> {
     const currentName = (userName || localStorage.getItem('lastUser') || 'default').toUpperCase().trim();
@@ -323,10 +362,37 @@ class ShiftCacheService {
 
     // 1. Check in-memory photo cache first
     if (this.photoCache.has(photoKey)) {
-      return this.photoCache.get(photoKey)!;
+      const cached = this.photoCache.get(photoKey)!;
+      if (cached && cached.length > 0) return cached;
     }
 
-    // 2. Query Firestore 'shift_photos' by shiftDate only to avoid composite index requirements
+    const photos: ShiftPhotoRecord[] = [];
+    const seenIds = new Set<string>();
+
+    // 2. Always fetch from local IndexedDB first (Fast & 100% Reliable Offline)
+    try {
+      const { getLocalPhotos } = await import('./indexedDbService');
+      const localPhotos = await getLocalPhotos(currentName, normDate);
+      if (localPhotos && localPhotos.length > 0) {
+        localPhotos.forEach((p: any) => {
+          if (p && p.blob && !seenIds.has(p.id)) {
+            seenIds.add(p.id);
+            photos.push({
+              photoId: p.id,
+              shiftDate: p.date || normDate,
+              userName: p.userName || currentName,
+              blob: p.blob,
+              orderIndex: p.orderIndex || 0,
+              type: p.type || 'label'
+            });
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('IndexedDB photo fetch failed:', err);
+    }
+
+    // 3. Augment with Firestore photos if available
     const nameVariants = new Set([
       currentName,
       currentName.toLowerCase(),
@@ -340,42 +406,21 @@ class ShiftCacheService {
       );
 
       const snap = await getDocs(q);
-      const photos: ShiftPhotoRecord[] = [];
       snap.forEach(d => {
         const pData = d.data() as ShiftPhotoRecord;
-        if (!pData.userName || nameVariants.has(pData.userName.toUpperCase().trim()) || nameVariants.has(pData.userName)) {
+        const pId = pData.photoId || d.id;
+        const pUser = (pData.userName || '').toUpperCase().trim();
+        if ((!pUser || nameVariants.has(pUser) || nameVariants.has(pData.userName)) && !seenIds.has(pId)) {
+          seenIds.add(pId);
           photos.push(pData);
         }
       });
-
-      // Local IndexedDB fallback so label pictures are never lost
-      if (photos.length === 0) {
-        try {
-          const { getLocalPhotos } = await import('./indexedDbService');
-          const localPhotos = await getLocalPhotos(currentName, normDate);
-          if (localPhotos && localPhotos.length > 0) {
-            localPhotos.forEach(p => {
-              photos.push({
-                photoId: p.id,
-                shiftDate: p.date,
-                userName: p.userName,
-                blob: p.blob,
-                orderIndex: p.orderIndex || 0,
-                type: p.type || 'label'
-              });
-            });
-          }
-        } catch (err) {
-          console.warn('IndexedDB photo fallback fetch failed:', err);
-        }
-      }
-
-      this.photoCache.set(photoKey, photos);
-      return photos;
     } catch (e) {
-      console.warn('Error fetching photos from Firestore:', e);
-      return [];
+      // Ignore Firestore quota/network errors: local photos are already returned
     }
+
+    this.photoCache.set(photoKey, photos);
+    return photos;
   }
 
   /**

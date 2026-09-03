@@ -7,6 +7,8 @@
  * - System Configs & Targets
  */
 
+import { normalizeDateKey } from '../utils/dateUtils';
+
 const DB_NAME = 'PickAppLocalDB';
 const DB_VERSION = 5;
 
@@ -361,11 +363,12 @@ export async function saveLocalPhoto(photoId: string, userName: string, date: st
 export async function getLocalPhotos(userName: string, date?: string): Promise<any[]> {
   if (!userName) return [];
   const safeName = userName.toUpperCase().trim();
-  const photos = await getAllLocalItems(STORES.LABEL_PHOTOS, 'userName', safeName);
+  const photos = await getAllLocalItems<any>(STORES.LABEL_PHOTOS, 'userName', safeName);
   if (date) {
-    return photos.filter(p => p.date === date);
+    const normDate = normalizeDateKey(date);
+    return (photos || []).filter(p => normalizeDateKey(p.date) === normDate);
   }
-  return photos;
+  return photos || [];
 }
 
 /**
