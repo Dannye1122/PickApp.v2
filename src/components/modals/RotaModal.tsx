@@ -131,26 +131,40 @@ export const RotaModal: React.FC<RotaModalProps> = ({
     let totalMsOnThisDay = 0;
     let hasActivity = false;
 
-    // 1. Process finalized shift summaries
+    // 1. Process finalized shift summaries with deduplicated best-record selection
     if (mergedShiftSummaries && mergedShiftSummaries.length > 0) {
-      mergedShiftSummaries.forEach(summary => {
+      const daySummaries = mergedShiftSummaries.filter(summary => {
         const clockInDateStr = summary.clockInTime ? getLocalDateString(new Date(summary.clockInTime)) : '';
         const normSummaryDate = normalizeDateStr(summary.date);
+        return clockInDateStr === targetDateStr || normSummaryDate === targetDateStr;
+      });
 
-        if (clockInDateStr === targetDateStr || normSummaryDate === targetDateStr) {
-          hasActivity = true;
-          const activeSecs = summary.activeSeconds || summary.totalSeconds;
-          if (activeSecs && activeSecs > 0) {
-            totalMsOnThisDay += activeSecs * 1000;
-          } else {
-            const startTime = summary.clockInTime;
-            const endTime = summary.clockOutTime;
-            if (startTime && endTime && endTime > startTime) {
-              totalMsOnThisDay += (endTime - startTime);
-            }
+      if (daySummaries.length > 0) {
+        hasActivity = true;
+        // Select the most complete summary for this day (highest cases and duration)
+        const bestSummary = daySummaries.reduce((best, curr) => {
+          const bestCases = Number(best.totalCases || best.cases || 0);
+          const currCases = Number(curr.totalCases || curr.cases || 0);
+          if (currCases > bestCases) return curr;
+          if (currCases === bestCases) {
+            const bestDur = Number(best.activeSeconds || best.totalSeconds || (best.clockOutTime && best.clockInTime ? (best.clockOutTime - best.clockInTime) / 1000 : 0));
+            const currDur = Number(curr.activeSeconds || curr.totalSeconds || (curr.clockOutTime && curr.clockInTime ? (curr.clockOutTime - curr.clockInTime) / 1000 : 0));
+            return currDur > bestDur ? curr : best;
+          }
+          return best;
+        }, daySummaries[0]);
+
+        const activeSecs = bestSummary.activeSeconds || bestSummary.totalSeconds;
+        if (activeSecs && activeSecs > 0) {
+          totalMsOnThisDay += activeSecs * 1000;
+        } else {
+          const startTime = bestSummary.clockInTime;
+          const endTime = bestSummary.clockOutTime;
+          if (startTime && endTime && endTime > startTime) {
+            totalMsOnThisDay += (endTime - startTime);
           }
         }
-      });
+      }
     }
 
     // 2. Include current running shift (real-time live math)
@@ -375,13 +389,27 @@ export const RotaModal: React.FC<RotaModalProps> = ({
                       const targetDayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0).getTime();
                       const targetDayEnd = targetDayStart + (24 * 60 * 60 * 1000) - 1;
 
-                      const matchingSummary = mergedShiftSummaries.find((summary: any) => {
+                      const matchingSummaries = mergedShiftSummaries.filter((summary: any) => {
                         const summaryClockInDate = summary.clockInTime 
                           ? getLocalDateString(new Date(summary.clockInTime)) 
                           : '';
                         const summaryNormDate = normalizeDateStr(summary.date);
                         return summaryClockInDate === dStr || summaryNormDate === dStr;
                       });
+
+                      const matchingSummary = matchingSummaries.length > 0
+                        ? matchingSummaries.reduce((best: any, curr: any) => {
+                            const bestCases = Number(best.totalCases || best.cases || 0);
+                            const currCases = Number(curr.totalCases || curr.cases || 0);
+                            if (currCases > bestCases) return curr;
+                            if (currCases === bestCases) {
+                              const bestTime = Number(best.clockOutTime || best.clockInTime || 0);
+                              const currTime = Number(curr.clockOutTime || curr.clockInTime || 0);
+                              return currTime > bestTime ? curr : best;
+                            }
+                            return best;
+                          }, matchingSummaries[0])
+                        : null;
 
                       const hasWorked = (actualHours !== null && actualHours > 0) || !!matchingSummary;
                       const override = shiftData.rotaOverrides?.[dStr];

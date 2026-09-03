@@ -18,6 +18,7 @@ import { db, auth } from '../lib/firebase';
 import { getLocalDateString, ShiftSummary } from './leaderboardService';
 import { compressImage } from '../lib/imageCompressor';
 import { normalizeDateKey } from '../utils/dateUtils';
+import { saveLocalItem, STORES } from './indexedDbService';
 
 export interface ShiftRecord {
   id: string;
@@ -237,7 +238,19 @@ class ShiftCacheService {
       }, { merge: true });
     } catch (err) {
       console.error('Firestore save shift_summaries failed:', err);
-      throw err;
+    }
+
+    // 1b. Redundant local storage in IndexedDB
+    try {
+      await saveLocalItem(STORES.SHIFT_HISTORY, {
+        ...summary,
+        id: docId,
+        userName: safeUser,
+        date: dateStr,
+        updatedAt: Date.now()
+      });
+    } catch (idbErr) {
+      console.warn('IndexedDB redundant shift backup failed:', idbErr);
     }
 
     // 2. Save Label Photos directly to Firestore 'shift_photos'

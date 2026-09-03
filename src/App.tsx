@@ -1242,6 +1242,36 @@ export default function App() {
             
             // Only reset if inactive for over 20 hours or if no active shift was started
             if (hoursSinceActive > 20 || (!shiftData.firstStartTime && hoursSinceActive > 8)) {
+                // Safeguard: If previous session had active picks and was not finalized, auto-commit it!
+                if (!shiftData.isShiftFinalized && ((shiftData.totalCases || 0) > 0 || (shiftData.history && shiftData.history.length > 0))) {
+                    try {
+                        const opName = (shiftData.operator || localStorage.getItem('lastUser') || 'DEFAULT').toUpperCase().trim();
+                        const shiftStartDate = shiftData.firstStartTime ? new Date(shiftData.firstStartTime) : new Date(lastActive);
+                        const logDate = getLocalDateString(shiftStartDate);
+                        const autoSummary = {
+                            userName: opName,
+                            department: shiftData.department || 'Aisles',
+                            zone: shiftData.zone || 'AMBIENT',
+                            totalCases: shiftData.totalCases || 0,
+                            finalRate: shiftData.rate || 0,
+                            activeSeconds: shiftData.activeTime || 0,
+                            totalSeconds: Math.max(0, Math.floor(((shiftData.lastStopTimestamp || Date.now()) - (shiftData.firstStartTime || Date.now())) / 1000)),
+                            breakSeconds: shiftData.totalExcludedTime || 0,
+                            steps: shiftData.steps || 0,
+                            date: logDate,
+                            history: shiftData.history || [],
+                            storeLabel: shiftData.storeLabel || '',
+                            clockInTime: shiftData.firstStartTime || lastActive,
+                            clockOutTime: shiftData.lastStopTimestamp || Date.now(),
+                            operatorNote: shiftData.operatorNote || '',
+                            notes: shiftData.operatorNote || ''
+                        };
+                        shiftDataService.finalizeShift(autoSummary).catch(err => console.warn('Auto-save unfinished shift failed:', err));
+                    } catch (e) {
+                        console.warn('Auto-commit unfinished shift error:', e);
+                    }
+                }
+
                 // New day reset
                 setShiftData((prev: any) => {
                     let newStreak = 1;

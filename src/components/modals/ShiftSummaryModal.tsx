@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle, Flame, Sparkles, Share, Download, FileText, Scale } from 'lucide-react';
+import { CheckCircle, Flame, Sparkles, Share, Download, FileText, Scale, Power } from 'lucide-react';
 import { formatHHMM, formatTime } from '../../utils/formatUtils';
 import { getDepartmentBreakdown } from '../../utils/statsUtils';
 import { calculateAislesExemptionDetail } from '../../lib/exemptionUtils';
@@ -261,10 +261,10 @@ export const ShiftSummaryModal: React.FC<ShiftSummaryModalProps> = ({
                     </button>
                     <button 
                         type="button"
-                        className={`flex-1 py-3.5 text-white rounded-2xl font-semibold tracking-wide transition-all shadow-lg bg-emerald-500 hover:bg-emerald-400 shadow-emerald-500/20 min-w-[100px]`}
+                        className={`flex-1 py-3.5 text-white rounded-2xl font-bold tracking-wide transition-all shadow-lg bg-rose-600 hover:bg-rose-500 active:scale-[0.98] shadow-rose-600/20 flex items-center justify-center gap-2 min-w-[120px]`}
                         onClick={endShift}
                     >
-                        START NEXT SHIFT
+                        <Power size={16} /> Close App
                     </button>
                 </div>
             </div>
