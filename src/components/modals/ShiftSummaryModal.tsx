@@ -5,6 +5,7 @@ import { getDepartmentBreakdown } from '../../utils/statsUtils';
 import { calculateAislesExemptionDetail } from '../../lib/exemptionUtils';
 import { haptic } from '../../services/hapticService';
 import { calculateEstimatedWeightKg, formatWeightTonnes } from '../../constants/weightBaselines';
+import { generateShiftCode } from '../../lib/shiftCodeUtils';
 
 interface ShiftSummaryModalProps {
     isOpen: boolean;
@@ -68,7 +69,7 @@ export const ShiftSummaryModal: React.FC<ShiftSummaryModalProps> = ({
                     <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
                         <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Shift Code</span>
                         <span className="text-amber-400 font-mono font-bold text-xs bg-amber-950/60 border border-amber-800/50 px-2 py-0.5 rounded tracking-wider select-all">
-                            {shiftData.shiftCode || 'N/A'}
+                            {shiftData.shiftCode || (shiftData.firstStartTime ? generateShiftCode(shiftData.operator, shiftData.firstStartTime) : 'N/A')}
                         </span>
                     </div>
                     <div className="flex justify-between items-center">

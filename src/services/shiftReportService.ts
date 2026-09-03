@@ -398,7 +398,7 @@ export async function restoreShiftFromReportText(
 
     try {
       syncManager.enqueue('shiftSummary', { docId, summaryData: completeSummary });
-      syncManager.sync();
+      syncManager.sync().catch(e => console.warn('syncManager restore sync error:', e));
     } catch (e) {
       console.warn('syncManager restore enqueue:', e);
     }

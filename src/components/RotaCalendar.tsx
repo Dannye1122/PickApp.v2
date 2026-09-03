@@ -23,6 +23,9 @@ export const RotaCalendar: React.FC<RotaCalendarProps> = ({ userName, onClose })
         fetchShiftSummaries(userName, false).then(data => {
             setShifts(data);
             setLoading(false);
+        }).catch(err => {
+            console.warn('RotaCalendar load shifts error:', err);
+            setLoading(false);
         });
     }, [userName]);
 

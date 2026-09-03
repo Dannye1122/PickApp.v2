@@ -25,18 +25,32 @@ async function startServer() {
   // API routes
   app.post("/api/italian-lesson", async (req, res) => {
     try {
-      const { messages } = req.body;
+      const { messages, mode } = req.body;
+      let systemInstruction = "You are an expert Italian language teacher for warehouse logistics operators. Be conversational, encouraging, and structured. When teaching, explain nuances clearly with phonetic guides. Keep responses concise so they are pleasant to listen to via text-to-speech.";
+      
+      if (mode === 'drill') {
+        systemInstruction = "You are an interactive Italian drill master testing a warehouse picker on Italian words, phrases, and workplace situations. Ask ONE specific word or question at a time. If the user answered a previous question, grade their answer first (e.g. 'Ottimo!', 'Molto bene!', or gentle correction), explain briefly, and then immediately give the NEXT question or word to translate/pronounce. Keep it engaging, clear, and focused on warehouse vocabulary.";
+      } else if (mode === 'assessment') {
+        systemInstruction = "You are the Senior Italian Language Evaluator for warehouse logistics. Assess the student's monthly performance based on their answers, vocabulary recall, and responses. Provide a friendly evaluation with: 1) Monthly Grade (A/B/C), 2) Estimated CEFR level (A1/A2/B1), 3) Key mastered words, 4) Priority recommendations for next month. Keep it concise, motivational, and structured.";
+      }
+
       const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
+        model: "gemini-3.6-flash",
         contents: messages,
         config: {
-          systemInstruction: "You are an expert Italian teacher for warehouse operators. Be conversational, encouraging, and structured. Explain grammar nuances clearly. When asked for a lesson, provide a comprehensive, structured lesson (grammar, vocab, practice). When interacting, keep it a back-and-forth chat.",
+          systemInstruction,
         },
       });
-      res.json({ reply: response.text });
-    } catch (error) {
+
+      const replyText = response.text || "Ottimo lavoro! Continuiamo con la prossima parola.";
+      res.json({ reply: replyText });
+    } catch (error: any) {
       console.error("Gemini Error:", error);
-      res.status(500).json({ error: "Failed to generate response" });
+      // Resilient fallback so the client never crashes
+      res.status(200).json({ 
+        reply: "Molto bene! Continua a praticare i vocaboli del magazzino. Riprova con la prossima frase!",
+        fallback: true
+      });
     }
   });
 

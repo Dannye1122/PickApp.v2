@@ -58,7 +58,88 @@ export const getOptimalLiveInterval = (): number => {
     return intervalSec * 1000;
 };
 
+export const DAILY_READ_LIMIT = 50000;
+export const DAILY_WRITE_LIMIT = 20000;
+export const QUOTA_CAP_RATIO = 0.80; // 80% strict cap for non-essential traffic
+
+export const BUDGETED_READ_MAX = Math.floor(DAILY_READ_LIMIT * QUOTA_CAP_RATIO); // 40,000 reads
+export const BUDGETED_WRITE_MAX = Math.floor(DAILY_WRITE_LIMIT * QUOTA_CAP_RATIO); // 16,000 writes
+
 let globalQuotaExceeded = false;
+
+const getTodayUtcKey = (): string => {
+    const d = new Date();
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+};
+
+/**
+ * Returns current daily read/write usage metrics against the 80% threshold.
+ */
+export const getQuotaUsage = (): { reads: number; writes: number; readPercent: number; writePercent: number; isPreservationMode: boolean } => {
+    try {
+        const key = `quota_usage_${getTodayUtcKey()}`;
+        const raw = localStorage.getItem(key);
+        if (raw) {
+            const data = JSON.parse(raw);
+            const reads = Number(data.reads || 0);
+            const writes = Number(data.writes || 0);
+            const readPercent = Math.min(100, Math.round((reads / DAILY_READ_LIMIT) * 100));
+            const writePercent = Math.min(100, Math.round((writes / DAILY_WRITE_LIMIT) * 100));
+            const isPreservationMode = reads >= BUDGETED_READ_MAX || writes >= BUDGETED_WRITE_MAX || isQuotaExceeded();
+            return { reads, writes, readPercent, writePercent, isPreservationMode };
+        }
+    } catch (e) {
+        // Fallback
+    }
+    return { reads: 0, writes: 0, readPercent: 0, writePercent: 0, isPreservationMode: isQuotaExceeded() };
+};
+
+/**
+ * Tracks an outbound Firestore read operation.
+ */
+export const trackFirestoreRead = (count: number = 1) => {
+    try {
+        const key = `quota_usage_${getTodayUtcKey()}`;
+        const cur = getQuotaUsage();
+        const updated = { reads: cur.reads + count, writes: cur.writes };
+        localStorage.setItem(key, JSON.stringify(updated));
+    } catch (e) {}
+};
+
+/**
+ * Tracks an outbound Firestore write operation.
+ */
+export const trackFirestoreWrite = (count: number = 1) => {
+    try {
+        const key = `quota_usage_${getTodayUtcKey()}`;
+        const cur = getQuotaUsage();
+        const updated = { reads: cur.reads, writes: cur.writes + count };
+        localStorage.setItem(key, JSON.stringify(updated));
+    } catch (e) {}
+};
+
+/**
+ * Checks if non-essential live activity (presence heartbeats, background live queries) is allowed.
+ * Halts strictly when 80% of daily quota is consumed to guarantee headroom for shift saves.
+ */
+export const isLiveActivityAllowed = (): boolean => {
+    if (isQuotaExceeded()) return false;
+    const usage = getQuotaUsage();
+    if (usage.reads >= BUDGETED_READ_MAX || usage.writes >= BUDGETED_WRITE_MAX) {
+        return false;
+    }
+    return true;
+};
+
+/**
+ * Checks if shift completion and critical shift saves are permitted.
+ * Shift saves have absolute priority over live traffic and are permitted up to 98% of hard limit.
+ */
+export const isShiftPriorityAllowed = (): boolean => {
+    if (globalQuotaExceeded) return false;
+    const usage = getQuotaUsage();
+    return usage.writes < DAILY_WRITE_LIMIT * 0.98;
+};
 
 /**
  * Marks Firestore quota as exceeded to prevent further outbound backend requests.
@@ -107,6 +188,12 @@ export const canFetchData = (cacheKey: string, force: boolean = false): boolean 
     if (isQuotaExceeded()) {
         return false;
     }
+
+    // Check 80% cap for live/leaderboard keys to protect shift saves
+    const isLiveKey = cacheKey.startsWith('leaderboard_') || cacheKey.startsWith('liveusers_');
+    if (isLiveKey && !isLiveActivityAllowed()) {
+        return false;
+    }
     
     // Water-tight optimization: strictly block background/inactive tabs from triggering database reads.
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
@@ -116,8 +203,6 @@ export const canFetchData = (cacheKey: string, force: boolean = false): boolean 
     const lastFetch = localStorage.getItem(`last_fetch_${cacheKey}`);
     if (!lastFetch) return true;
     
-    // Dynamic throttling for highly frequent live paths
-    const isLiveKey = cacheKey.startsWith('leaderboard_') || cacheKey.startsWith('liveusers_');
     const interval = isLiveKey ? getOptimalLiveInterval() : TEN_MINUTES_MS;
     
     const elapsed = Date.now() - parseInt(lastFetch);

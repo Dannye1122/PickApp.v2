@@ -3,7 +3,7 @@ const { getFirestore, collection, query, where, getDocs } = require('firebase/fi
 const fs = require('fs');
 const firebaseConfig = JSON.parse(fs.readFileSync('./firebase-applet-config.json', 'utf8'));
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 async function run() {
   const q = query(collection(db, 'leaderboard'), where('type', '==', 'live'));

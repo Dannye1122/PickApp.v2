@@ -36,7 +36,7 @@ export const RestoreShiftModal: React.FC<RestoreShiftModalProps> = ({
             setRestoreStatus({ type: 'success', msg: res.message });
             fetchShiftSummaries(targetOp, true).then(fresh => {
                 onShiftRestored(fresh);
-            });
+            }).catch(e => console.warn('Could not fetch restored shift summaries:', e));
             setTimeout(() => {
                 onClose();
                 setRestoreText('');

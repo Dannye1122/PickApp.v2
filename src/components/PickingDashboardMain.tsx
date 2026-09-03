@@ -8,6 +8,7 @@ import { MetricCard } from './stats/MetricCard';
 import { ShiftData, ThemeColors } from '../types';
 import { DEPT_LANES } from '../constants/data';
 import { isBreakEntry, isNoteEntry, isPickEntry } from '../utils/statsUtils';
+import { generateShiftCode } from '../lib/shiftCodeUtils';
 
 export interface PickingDashboardMainProps {
     shiftData: ShiftData;
@@ -360,7 +361,7 @@ export const PickingDashboardMain: React.FC<PickingDashboardMainProps> = ({
                                                 <Hash size={12} className="text-amber-400" />
                                                 <span>SHIFT CODE:</span>
                                                 <span className="text-amber-300 font-extrabold bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded text-[11px] tracking-widest select-all">
-                                                    {shiftData.shiftCode || 'N/A'}
+                                                    {shiftData.shiftCode || (shiftData.firstStartTime ? generateShiftCode(shiftData.operator, shiftData.firstStartTime) : 'N/A')}
                                                 </span>
                                             </div>
                                             <span className="text-[9px] text-emerald-400/80 font-bold uppercase tracking-wider bg-emerald-950/40 border border-emerald-800/40 px-1.5 py-0.5 rounded">VERIFIED</span>

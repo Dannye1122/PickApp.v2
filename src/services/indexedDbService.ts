@@ -109,7 +109,8 @@ export const initLocalDB = (): Promise<IDBDatabase> => {
     };
 
     request.onerror = (event) => {
-      console.error('PickAppLocalDB open error:', (event.target as IDBOpenDBRequest).error);
+      console.warn('PickAppLocalDB open error:', (event.target as IDBOpenDBRequest).error);
+      dbPromise = null;
       reject((event.target as IDBOpenDBRequest).error);
     };
   });
@@ -123,7 +124,7 @@ export const initLocalDB = (): Promise<IDBDatabase> => {
 export async function saveLocalItem(storeName: string, item: any): Promise<void> {
   try {
     const db = await initLocalDB();
-    return new Promise((resolve, reject) => {
+    return await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
       const req = store.put(item);
@@ -131,7 +132,7 @@ export async function saveLocalItem(storeName: string, item: any): Promise<void>
       req.onerror = () => reject(req.error);
     });
   } catch (err) {
-    console.error(`Failed to save to local DB [${storeName}]:`, err);
+    console.warn(`Failed to save to local DB [${storeName}]:`, err);
   }
 }
 
@@ -142,7 +143,7 @@ export async function saveLocalItems(storeName: string, items: any[]): Promise<v
   if (!items || items.length === 0) return;
   try {
     const db = await initLocalDB();
-    return new Promise((resolve, reject) => {
+    return await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
       for (const item of items) {
@@ -152,7 +153,7 @@ export async function saveLocalItems(storeName: string, items: any[]): Promise<v
       tx.onerror = () => reject(tx.error);
     });
   } catch (err) {
-    console.error(`Failed bulk save to local DB [${storeName}]:`, err);
+    console.warn(`Failed bulk save to local DB [${storeName}]:`, err);
   }
 }
 
@@ -162,7 +163,7 @@ export async function saveLocalItems(storeName: string, items: any[]): Promise<v
 export async function getLocalItem<T = any>(storeName: string, key: IDBValidKey): Promise<T | null> {
   try {
     const db = await initLocalDB();
-    return new Promise((resolve, reject) => {
+    return await new Promise<T | null>((resolve, reject) => {
       const tx = db.transaction(storeName, 'readonly');
       const store = tx.objectStore(storeName);
       const req = store.get(key);
@@ -170,7 +171,7 @@ export async function getLocalItem<T = any>(storeName: string, key: IDBValidKey)
       req.onerror = () => reject(req.error);
     });
   } catch (err) {
-    console.error(`Failed to get from local DB [${storeName}]:`, err);
+    console.warn(`Failed to get from local DB [${storeName}]:`, err);
     return null;
   }
 }
@@ -185,7 +186,7 @@ export async function getAllLocalItems<T = any>(
 ): Promise<T[]> {
   try {
     const db = await initLocalDB();
-    return new Promise((resolve, reject) => {
+    return await new Promise<T[]>((resolve, reject) => {
       const tx = db.transaction(storeName, 'readonly');
       const store = tx.objectStore(storeName);
       
@@ -222,7 +223,7 @@ export async function getAllLocalItems<T = any>(
       req.onerror = () => reject(req.error);
     });
   } catch (err) {
-    console.error(`Failed to get all from local DB [${storeName}]:`, err);
+    console.warn(`Failed to get all from local DB [${storeName}]:`, err);
     return [];
   }
 }
@@ -233,7 +234,7 @@ export async function getAllLocalItems<T = any>(
 export async function deleteLocalItem(storeName: string, key: IDBValidKey): Promise<void> {
   try {
     const db = await initLocalDB();
-    return new Promise((resolve, reject) => {
+    return await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
       const req = store.delete(key);
@@ -241,7 +242,7 @@ export async function deleteLocalItem(storeName: string, key: IDBValidKey): Prom
       req.onerror = () => reject(req.error);
     });
   } catch (err) {
-    console.error(`Failed to delete from local DB [${storeName}]:`, err);
+    console.warn(`Failed to delete from local DB [${storeName}]:`, err);
   }
 }
 
@@ -251,7 +252,7 @@ export async function deleteLocalItem(storeName: string, key: IDBValidKey): Prom
 export async function clearLocalStore(storeName: string): Promise<void> {
   try {
     const db = await initLocalDB();
-    return new Promise((resolve, reject) => {
+    return await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
       const req = store.clear();
@@ -259,7 +260,7 @@ export async function clearLocalStore(storeName: string): Promise<void> {
       req.onerror = () => reject(req.error);
     });
   } catch (err) {
-    console.error(`Failed to clear store [${storeName}]:`, err);
+    console.warn(`Failed to clear store [${storeName}]:`, err);
   }
 }
 

@@ -32,7 +32,7 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
                     if (type === 'clear') {
                         clearLeaderboard().then(success => {
                             if (success) window.alert("Leaderboard cleared!");
-                        });
+                        }).catch(e => console.warn('Clear leaderboard error:', e));
                         onClose();
                     } else if (type === 'purge') {
                         purgeDatabaseOlderThan6Weeks().then(res => {
@@ -41,7 +41,7 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
                             } else {
                                 window.alert(`Database purge failed: ${res.error}`);
                             }
-                        });
+                        }).catch(e => console.warn('Purge database error:', e));
                         onClose();
                     } else {
                         const consented = localStorage.getItem('userConsented');

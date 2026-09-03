@@ -2,7 +2,7 @@ import { db, auth } from '../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, setDoc, serverTimestamp, writeBatch, query, where, limit, getDocs } from 'firebase/firestore';
 import { OperationType } from './leaderboardService';
-import { markQuotaExceeded, isQuotaExceeded } from '../utils/quotaManager';
+import { markQuotaExceeded, isQuotaExceeded, isLiveActivityAllowed, isShiftPriorityAllowed, trackFirestoreWrite } from '../utils/quotaManager';
 import { STORES, getAllLocalItems, saveLocalItems } from './indexedDbService';
 
 interface FirestoreErrorInfo {
@@ -83,8 +83,8 @@ class SyncManager {
         try {
             onAuthStateChanged(auth, (user) => {
                 if (user && navigator.onLine) {
-                    this.sync();
-                    this.reconcileLocalDbWithFirebase();
+                    this.sync().catch(err => console.warn('[SyncManager] Auth sync error:', err));
+                    this.reconcileLocalDbWithFirebase().catch(err => console.warn('[SyncManager] Auth reconcile error:', err));
                 }
             });
         } catch (e) {}
@@ -92,8 +92,8 @@ class SyncManager {
         // Listen for network reconnect
         if (typeof window !== 'undefined') {
             window.addEventListener('online', () => {
-                this.sync();
-                this.reconcileLocalDbWithFirebase();
+                this.sync().catch(err => console.warn('[SyncManager] Online sync error:', err));
+                this.reconcileLocalDbWithFirebase().catch(err => console.warn('[SyncManager] Online reconcile error:', err));
             });
         }
     }
@@ -187,6 +187,11 @@ class SyncManager {
     }
 
     public enqueue(type: SyncTask['type'], payload: any) {
+        // Enforce 80% quota preservation: drop non-essential live heartbeats if quota cap is reached
+        if (type === 'liveStatus' && !isLiveActivityAllowed()) {
+            return;
+        }
+
         // Simple conflict resolution: If there's already a liveStatus task for the same user, replace it
         if (type === 'liveStatus') {
             this.queue = this.queue.filter(t => !(t.type === 'liveStatus' && t.payload.user === payload.user));
@@ -204,27 +209,41 @@ class SyncManager {
         this.saveQueue();
         
         if (navigator.onLine) {
-            this.sync();
+            this.sync().catch(err => console.warn('[SyncManager] Auto sync error:', err));
         }
     }
 
     public async sync() {
-        if (this.isSyncing || this.queue.length === 0 || !navigator.onLine || isQuotaExceeded()) return;
+        if (this.isSyncing || this.queue.length === 0 || !navigator.onLine) return;
+
+        const hasShiftTask = this.queue.some(t => t.type === 'shiftSummary');
+        // If quota exceeded or in preservation mode, ONLY allow shiftSummary tasks to process
+        if (isQuotaExceeded() && (!hasShiftTask || !isShiftPriorityAllowed())) {
+            return;
+        }
 
         this.isSyncing = true;
-        // Starting sync for items...
         
-        const tasksToProcess = [...this.queue];
-        const failedTasks: SyncTask[] = [];
-        
+        // Priority sorting: Shift summaries always sync FIRST over everything else
+        const tasksToProcess = [...this.queue].sort((a, b) => {
+            if (a.type === 'shiftSummary' && b.type !== 'shiftSummary') return -1;
+            if (b.type === 'shiftSummary' && a.type !== 'shiftSummary') return 1;
+            return a.timestamp - b.timestamp;
+        });
+
         for (const task of tasksToProcess) {
+            // If quota is tight, skip liveStatus tasks so they don't consume writes
+            if (task.type === 'liveStatus' && !isLiveActivityAllowed()) {
+                // Drop stale liveStatus task from queue
+                this.queue = this.queue.filter(t => t.id !== task.id);
+                continue;
+            }
+
             try {
                 await this.processTask(task);
                 // Successfully processed, remove from queue
                 this.queue = this.queue.filter(t => t.id !== task.id);
             } catch (error: any) {
-                // Task sync failed, retry logic applied.
-                
                 task.retryCount++;
                 const isConnectionUnstable = 
                     !navigator.onLine || 
@@ -234,12 +253,12 @@ class SyncManager {
                     error?.message?.toLowerCase().includes('offline') || 
                     error?.message?.toLowerCase().includes('network');
 
-                if (task.retryCount < 5 || isConnectionUnstable) {
-                    // Keep in queue to retry
+                if (task.retryCount < 5 || isConnectionUnstable || task.type === 'shiftSummary') {
+                    // Always preserve shiftSummary in queue to guarantee zero lost shifts
                     const qTask = this.queue.find(t => t.id === task.id);
                     if (qTask) qTask.retryCount = task.retryCount;
                 } else {
-                    // Give up after 5 tries unless it's just offline
+                    // Give up on non-critical tasks after 5 tries
                     this.queue = this.queue.filter(t => t.id !== task.id);
                 }
             }
@@ -250,18 +269,20 @@ class SyncManager {
     }
 
     private async processTask(task: SyncTask) {
+        if (!task || !task.payload) return;
         const { type, payload } = task;
         const warehouseId = payload.warehouseId || 'MAIN';
         
         try {
             if (type === 'liveStatus') {
                 const { user, rate, department, totalCases, activeSeconds, steps, xp, status, targetRate, docId, currentOrder, customStatus, listeningTo, date } = payload;
+                if (!docId) return;
                 const liveRef = doc(db, 'leaderboard', docId);
                 const todayStr = date || new Date().toISOString().split('T')[0];
                 await setDoc(liveRef, {
-                    name: user.toUpperCase(),
-                    rate,
-                    department,
+                    name: (user || '').toUpperCase(),
+                    rate: rate || 0,
+                    department: department || 'AMBIENT',
                     totalCases: totalCases || 0,
                     activeSeconds: activeSeconds || 0,
                     steps: steps || 0,
@@ -276,18 +297,22 @@ class SyncManager {
                     date: todayStr,
                     lastUpdate: serverTimestamp()
                 }, { merge: true });
+                trackFirestoreWrite(1);
             } 
             else if (type === 'leaderboard') {
                 const { docId, entry } = payload;
+                if (!docId || !entry) return;
                 const docRef = doc(db, 'leaderboard', docId);
                 await setDoc(docRef, {
                     ...entry,
                     warehouseId,
                     timestamp: serverTimestamp()
                 }, { merge: true });
+                trackFirestoreWrite(1);
             }
             else if (type === 'shiftSummary') {
                 const { docId, summaryData } = payload;
+                if (!docId || !summaryData) return;
                 if (summaryData.userId === 'anon' && auth.currentUser) {
                     summaryData.userId = auth.currentUser.uid;
                 }
@@ -300,6 +325,7 @@ class SyncManager {
                     ...summaryData, 
                     timestamp: serverTimestamp() 
                 }, { merge: true });
+                trackFirestoreWrite(1);
             }
         } catch (error) {
             handleFirestoreError(error, OperationType.WRITE, type);

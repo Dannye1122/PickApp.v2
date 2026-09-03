@@ -23,7 +23,7 @@ import { normalizeDateKey } from '../utils/dateUtils';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { canFetchData, getCachedData, setCachedData, markDataFetched, markQuotaExceeded, isQuotaExceeded, getOptimalLiveInterval } from '../utils/quotaManager';
+import { canFetchData, getCachedData, setCachedData, markDataFetched, markQuotaExceeded, isQuotaExceeded, getOptimalLiveInterval, trackFirestoreRead, trackFirestoreWrite, isLiveActivityAllowed, isShiftPriorityAllowed } from '../utils/quotaManager';
 import { STORES, getLocalItem, saveLocalItem, saveLocalItems, getAllLocalItems, deleteLocalItem, saveLocalRota, saveLocalShiftSummaries, getLocalShiftSummaries } from './indexedDbService';
 
 import { UserRole, UserProfile } from '../types';
@@ -351,18 +351,58 @@ export const updateLiveStatus = async (user: string, rate: number, department: s
   }
 };
 
+const getLocalActiveUserRecord = () => {
+  try {
+    const lastUser = localStorage.getItem('lastUser');
+    if (!lastUser || lastUser.toUpperCase() === 'ADMIN') return null;
+    const rawPickData = localStorage.getItem(`pickData_${lastUser}`);
+    if (rawPickData) {
+      const p = JSON.parse(rawPickData);
+      if ((p.isPicking || p.firstStartTime) && !p.isShiftFinalized) {
+        return {
+          id: `LOCAL_${lastUser.toUpperCase()}`,
+          name: lastUser.toUpperCase(),
+          user: lastUser.toUpperCase(),
+          type: 'live',
+          isActive: true,
+          rate: p.currentRate || p.casesPerHour || 0,
+          department: p.department || 'Ambient',
+          totalCases: p.totalCases || 0,
+          activeSeconds: p.activeSeconds || 0,
+          steps: p.steps || 0,
+          xp: p.xp || 0,
+          status: p.isOnBreak ? 'break' : 'picking',
+          targetRate: p.customTargetRate || 200,
+          currentOrder: p.currentOrder || '',
+          customStatus: p.customStatus || '',
+          lastUpdate: { seconds: Math.floor(Date.now() / 1000) },
+          isLocalUser: true
+        };
+      }
+    }
+  } catch (e) {}
+  return null;
+};
+
 export const fetchLiveUsers = async (warehouseId: string, force: boolean = false): Promise<any[]> => {
     const cacheKey = `liveusers_${warehouseId}`;
     
     if (!canFetchData(cacheKey, force)) {
       const cached = getCachedData<any[]>(cacheKey);
-      if (cached && cached.length > 0) return cached;
+      if (cached && cached.length > 0) {
+        const localUser = getLocalActiveUserRecord();
+        if (localUser && !cached.some((u: any) => (u.name || '').toUpperCase() === localUser.name)) {
+          return [localUser, ...cached];
+        }
+        return cached;
+      }
     }
 
     try {
       const liveRef = collection(db, 'leaderboard');
       const q = query(liveRef, where('type', '==', 'live'));
       const snapshot = await getDocs(q);
+      trackFirestoreRead(snapshot.docs.length || 1);
 
       const rawUsers = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -401,6 +441,12 @@ export const fetchLiveUsers = async (warehouseId: string, force: boolean = false
         }
       });
 
+      // Guarantee local user presence if actively on shift
+      const localUser = getLocalActiveUserRecord();
+      if (localUser && !uniqueUsers[localUser.name]) {
+        uniqueUsers[localUser.name] = localUser;
+      }
+
       const liveBots = getDailyAILiveUsers();
       const uniqueUsersList = [...Object.values(uniqueUsers), ...liveBots];
       setCachedData(cacheKey, uniqueUsersList);
@@ -409,7 +455,11 @@ export const fetchLiveUsers = async (warehouseId: string, force: boolean = false
       handleFirestoreError(error, OperationType.LIST, 'leaderboard');
       const cached = getCachedData<any[]>(cacheKey) || [];
       const liveBots = getDailyAILiveUsers();
-      const fallbackList = cached.length > 0 ? cached : liveBots;
+      const fallbackList = cached.length > 0 ? [...cached] : [...liveBots];
+      const localUser = getLocalActiveUserRecord();
+      if (localUser && !fallbackList.some((u: any) => (u.name || '').toUpperCase() === localUser.name)) {
+        fallbackList.unshift(localUser);
+      }
       return fallbackList;
     }
 };
@@ -642,17 +692,14 @@ export const saveShiftSummary = async (summary: Omit<ShiftSummary, 'timestamp' |
       const deterministicDocId = `${safeName}_${loginDate}`;
       const deterministicRef = doc(summaryRef, deterministicDocId);
       await setDoc(deterministicRef, summaryData, { merge: true });
+      trackFirestoreWrite(2);
     } catch (directError) {
       console.warn("Direct Firestore setDoc in saveShiftSummary failed, syncManager backup will handle retry:", directError);
     }
     
     // Queue to syncManager as offline backup and trigger sync
     syncManager.enqueue('shiftSummary', { docId, summaryData });
-    try {
-      syncManager.sync();
-    } catch (syncErr) {
-      // Ignore background sync trigger errors
-    }
+    syncManager.sync().catch(syncErr => console.warn('Background sync error in saveShiftSummary:', syncErr));
     return true;
   } catch (error) {
     // Operation failed silently.
@@ -1171,7 +1218,7 @@ export const fetchShiftSummaries = async (userName: string, force: boolean = fal
 
 /** @deprecated Use fetchShiftSummaries manually */
 export const subscribeToShiftSummaries = (userName: string, callback: (summaries: ShiftSummary[]) => void) => {
-  fetchShiftSummaries(userName).then(callback);
+  fetchShiftSummaries(userName).then(callback).catch(err => console.warn('subscribeToShiftSummaries error:', err));
   return () => {};
 };
 
@@ -1358,7 +1405,7 @@ export const fetchAllUsers = async (warehouseId: string, force: boolean = false)
 
 /** @deprecated Use fetchAllUsers manually */
 export const subscribeToAllUsers = (warehouseId: string, callback: (users: any[]) => void) => {
-  fetchAllUsers(warehouseId).then(callback);
+  fetchAllUsers(warehouseId).then(callback).catch(err => console.warn('subscribeToAllUsers error:', err));
   return () => {};
 };
 
@@ -1714,7 +1761,7 @@ export const fetchAllShiftSummaries = async (force: boolean = false): Promise<Sh
 
 /** @deprecated Use fetchAllShiftSummaries manually */
 export const subscribeToAllShiftSummaries = (callback: (summaries: ShiftSummary[]) => void) => {
-  fetchAllShiftSummaries().then(callback);
+  fetchAllShiftSummaries().then(callback).catch(err => console.warn('subscribeToAllShiftSummaries error:', err));
   return () => {};
 };
 

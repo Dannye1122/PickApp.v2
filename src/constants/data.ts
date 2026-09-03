@@ -176,3 +176,5 @@ export const DUO_MESSAGES = {
         "Target is at your feet, {name}. Keep this pace and we own the place."
     ]
 };
+
+export { APP_VERSION } from './version';

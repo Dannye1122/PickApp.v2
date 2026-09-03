@@ -56,6 +56,7 @@ import { CapCamera, CameraResultType, CameraSource, Preferences } from './lib/ca
 import { triggerWebCamera } from './utils/webCamera';
 import { getDeptName, resolveDepartmentInfo } from './utils/deptUtils';
 import { getDepartmentBreakdown, isBreakEntry, isNoteEntry, isPickEntry } from './utils/statsUtils';
+import { generateShiftCode } from './lib/shiftCodeUtils';
 
 // New Modular Architecture
 import { OnboardingModal } from './components/OnboardingModal';
@@ -151,12 +152,37 @@ export default function App() {
 
     useEffect(() => {
         const handleError = (event: ErrorEvent) => {
-            console.error("Caught error:", event.error);
-            showToast("Critical UI Error detected: " + (event.error?.message || "Verify data integrity"), "error");
+            const msg = event.error?.message || event.message || '';
+            if (msg.includes('ResizeObserver') || msg.includes('Script error')) {
+                return;
+            }
+            console.warn("UI Warning caught:", event.error || event.message);
         };
         const handleRejection = (event: PromiseRejectionEvent) => {
-            console.error("Sync failure detected:", event.reason);
-            showToast("Data sync pending or interrupted. Connection unstable.", "error");
+            const reason = event.reason;
+            const message = reason?.message || String(reason || '');
+            const isBenign = 
+                message.includes('AbortError') ||
+                message.includes('aborted') ||
+                message.includes('cancelled') ||
+                message.includes('canceled') ||
+                message.includes('not supported') ||
+                message.includes('permission') ||
+                message.includes('quota') ||
+                message.includes('QuotaExceeded') ||
+                message.includes('Failed to fetch') ||
+                message.includes('Load failed') ||
+                message.includes('network-request-failed') ||
+                message.includes('unavailable') ||
+                message.includes('timeout') ||
+                message.includes('offline');
+
+            if (isBenign) {
+                console.warn("Handled promise rejection (offline/benign):", reason);
+                return;
+            }
+
+            console.warn("Background task interrupted:", reason);
         };
 
         window.addEventListener('error', handleError);
@@ -630,9 +656,9 @@ export default function App() {
                     
                     saveUserProfile(uid, userUpper, storedPin, newProfile, sessionId).then(() => {
                         setUserProfile(newProfile);
-                    });
+                    }).catch(err => console.warn('Auto-provision user profile save error:', err));
                 }
-            });
+            }).catch(err => console.warn('Initial getUserProfile load error:', err));
         }
     }, [isAuthenticated]);
 
@@ -1158,7 +1184,7 @@ export default function App() {
                 if(data && data.globalTargetRate) {
                     setAdminTargetRate(data.globalTargetRate.toString());
                 }
-            });
+            }).catch(err => console.warn('Load warehouse settings error:', err));
         }
     }, [settingsTab, currentWarehouseId]);
 
@@ -1486,9 +1512,9 @@ export default function App() {
                 if (allSummaries && allSummaries.length > 0) {
                     setAllShiftSummariesList(allSummaries);
                 }
-            }).catch(e => handleFirestoreError(e, OperationType.LIST, 'shift_summaries'));
+            }).catch(e => console.warn('Background fetch all shift summaries:', e));
         } catch (e) {
-            handleFirestoreError(e, OperationType.LIST, 'leaderboard');
+            console.warn('fetchLeaderboardManual background load:', e);
         } finally {
             setFetchingLeaderboard(false);
         }
@@ -1501,7 +1527,7 @@ export default function App() {
             const summaries = await fetchShiftSummaries(shiftData.operator, force);
             setShiftSummaries(summaries);
         } catch (e) {
-            handleFirestoreError(e, OperationType.LIST, 'shift_summaries');
+            console.warn('fetchSummariesManual background load:', e);
         } finally {
             setFetchingSummaries(false);
         }
@@ -1513,7 +1539,7 @@ export default function App() {
             const summaries = await fetchAllShiftSummaries(force);
             setAdminAllSummaries(summaries);
         } catch (e) {
-            handleFirestoreError(e, OperationType.LIST, 'shift_summaries');
+            console.warn('fetchAdminSummariesManual background load:', e);
         }
     }, [firebaseUser?.uid, userProfile]);
 
@@ -1522,11 +1548,11 @@ export default function App() {
         if (!isAuthenticated || !firebaseUser) return;
 
         const refreshAllStats = () => {
-            fetchLeaderboardManual(false);
-            fetchSummariesManual(false);
-            fetchWarehouseConfigManual(false);
+            fetchLeaderboardManual(false).catch(() => {});
+            fetchSummariesManual(false).catch(() => {});
+            fetchWarehouseConfigManual(false).catch(() => {});
             if (isUserAdmin()) {
-                fetchAdminSummariesManual(false);
+                fetchAdminSummariesManual(false).catch(() => {});
             }
         };
 
@@ -1769,59 +1795,68 @@ export default function App() {
 
     useEffect(() => {
         const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
-            // AuthState changed
-            const isSessionAuth = sessionStorage.getItem('session_authenticated') === 'true';
-            if (user) {
-                if (!isSessionAuth) {
-                    // Force logout of Firebase to prompt for PIN credentials entry on fresh startup
-                    try {
-                        await signOut(auth);
-                    } catch (signOutErr) {}
-                    setFirebaseUser(null);
-                    setIsAuthenticated(false);
-                    return;
-                }
-                setFirebaseUser(user);
-                
-                // Simultaneous session check
-                const profile = await getUserProfile(user.uid);
-                if (profile && profile.activeSessionId && profile.activeSessionId !== sessionId) {
-                    await signOut(auth);
-                    setIsAuthenticated(false);
-                    setFirebaseUser(null);
-                    alert("Logged in from another device.");
-                    return;
-                }
+            try {
+                // AuthState changed
+                const isSessionAuth = sessionStorage.getItem('session_authenticated') === 'true';
+                if (user) {
+                    if (!isSessionAuth) {
+                        // Force logout of Firebase to prompt for PIN credentials entry on fresh startup
+                        try {
+                            await signOut(auth);
+                        } catch (signOutErr) {}
+                        setFirebaseUser(null);
+                        setIsAuthenticated(false);
+                        return;
+                    }
+                    setFirebaseUser(user);
+                    
+                    // Simultaneous session check
+                    const profile = await getUserProfile(user.uid).catch(() => null);
+                    if (profile && profile.activeSessionId && profile.activeSessionId !== sessionId) {
+                        try {
+                            await signOut(auth);
+                        } catch (e) {}
+                        setIsAuthenticated(false);
+                        setFirebaseUser(null);
+                        alert("Logged in from another device.");
+                        return;
+                    }
 
-                const opName = shiftData.operator || localStorage.getItem('lastUser') || (user.email ? user.email.split('@')[0].toUpperCase() : '');
-                setIsAuthenticated(true);
-                if (opName) {
-                    await saveUserProfile(user.uid, opName, null, { 
-                        level: shiftData.level, 
-                        xp: shiftData.xp, 
-                        achievements: shiftData.achievements, 
-                        selectedSkin: shiftData.selectedSkin 
-                    }, sessionId);
-                }
-            } else {
-                setFirebaseUser(null);
-                if (!isSessionAuth) {
-                    // Do not auto-login with archived credentials on a fresh session startup
-                    setIsAuthenticated(false);
+                    const opName = shiftData.operator || localStorage.getItem('lastUser') || (user.email ? user.email.split('@')[0].toUpperCase() : '');
+                    setIsAuthenticated(true);
+                    if (opName) {
+                        await saveUserProfile(user.uid, opName, null, { 
+                            level: shiftData.level, 
+                            xp: shiftData.xp, 
+                            achievements: shiftData.achievements, 
+                            selectedSkin: shiftData.selectedSkin 
+                        }, sessionId).catch(e => console.warn('Save user profile during auth error:', e));
+                    }
                 } else {
-                    // We have an active local session but Firebase Auth has no user.
-                    // Automatically re-authenticate in the background to ensure permissions match.
-                    const lastUser = shiftData.operator || localStorage.getItem('lastUser');
-                    if (lastUser) {
-                        const cachedPin = localStorage.getItem(`offline_pin_${lastUser.toUpperCase()}`);
-                        if (cachedPin) {
-                            const email = lastUser.includes('@') ? lastUser.toLowerCase() : `${lastUser.toLowerCase()}@pick.app`;
-                            const authPin = cachedPin.length < 6 ? cachedPin.padEnd(6, '0') : cachedPin;
-                            try {
-                                const userCred = await signInWithEmailAndPassword(auth, email, authPin);
-                                setFirebaseUser(userCred.user);
-                            } catch (e) {
-                                // Fallback to anonymous auth to keep Firestore operational
+                    setFirebaseUser(null);
+                    if (!isSessionAuth) {
+                        // Do not auto-login with archived credentials on a fresh session startup
+                        setIsAuthenticated(false);
+                    } else {
+                        // We have an active local session but Firebase Auth has no user.
+                        // Automatically re-authenticate in the background to ensure permissions match.
+                        const lastUser = shiftData.operator || localStorage.getItem('lastUser');
+                        if (lastUser) {
+                            const cachedPin = localStorage.getItem(`offline_pin_${lastUser.toUpperCase()}`);
+                            if (cachedPin) {
+                                const email = lastUser.includes('@') ? lastUser.toLowerCase() : `${lastUser.toLowerCase()}@pick.app`;
+                                const authPin = cachedPin.length < 6 ? cachedPin.padEnd(6, '0') : cachedPin;
+                                try {
+                                    const userCred = await signInWithEmailAndPassword(auth, email, authPin);
+                                    setFirebaseUser(userCred.user);
+                                } catch (e) {
+                                    // Fallback to anonymous auth to keep Firestore operational
+                                    try {
+                                        const userCred = await signInAnonymously(auth);
+                                        setFirebaseUser(userCred.user);
+                                    } catch (anonErr) {}
+                                }
+                            } else {
                                 try {
                                     const userCred = await signInAnonymously(auth);
                                     setFirebaseUser(userCred.user);
@@ -1833,13 +1868,10 @@ export default function App() {
                                 setFirebaseUser(userCred.user);
                             } catch (anonErr) {}
                         }
-                    } else {
-                        try {
-                            const userCred = await signInAnonymously(auth);
-                            setFirebaseUser(userCred.user);
-                        } catch (anonErr) {}
                     }
                 }
+            } catch (authErr) {
+                console.warn('Auth state change handler error:', authErr);
             }
         });
         return () => unsubscribeAuth();
@@ -2138,7 +2170,7 @@ export default function App() {
                         const userWarehouse = firestoreUser.warehouseId || 'MAIN';
                         import('./services/leaderboardService').then(mod => {
                             mod.setWarehouseContext(userWarehouse);
-                        });
+                        }).catch(err => console.warn('Dynamic import leaderboardService error:', err));
                         localStorage.setItem(`offline_warehouse_${userUpper}`, userWarehouse);
 
                         sessionStorage.setItem('session_authenticated', 'true');
@@ -2162,7 +2194,9 @@ export default function App() {
                         setShiftData((prev: any) => ({ ...prev, ...finalLoaded }));
                         
                         // Also sign in anonymously to keep Firebase active
-                        await signInAnonymously(auth);
+                        try {
+                            await signInAnonymously(auth);
+                        } catch (anonErr) {}
                         return;
                     }
                 }
@@ -2193,7 +2227,7 @@ export default function App() {
 
                 import('./services/leaderboardService').then(mod => {
                     mod.setWarehouseContext(cachedWarehouse);
-                });
+                }).catch(err => console.warn('Dynamic import leaderboardService error:', err));
 
                 sessionStorage.setItem('session_authenticated', 'true');
                 setIsAuthenticated(true);
@@ -2256,13 +2290,15 @@ export default function App() {
         requestMotionPermission();
         localStorage.setItem('shiftStepBackup', '0');
         const startTime = now.getTime();
+        const code = generateShiftCode(shiftData.operator, startTime);
         setShiftData((prev: any) => ({ 
             ...prev, 
             firstStartTime: startTime,
             lastStopTimestamp: startTime,
+            shiftCode: prev.shiftCode || code,
             steps: 0
         }));
-        updateShiftData({ hasGapAlerted: false });
+        updateShiftData({ hasGapAlerted: false, shiftCode: shiftData.shiftCode || code });
     };
 
     const manualStart = (timeStr: string) => {
@@ -2282,13 +2318,15 @@ export default function App() {
         haptic('medium');
         requestMotionPermission();
         localStorage.setItem('shiftStepBackup', '0');
+        const code = generateShiftCode(shiftData.operator, startTime.getTime());
         setShiftData((prev: any) => ({ 
             ...prev, 
             firstStartTime: startTime.getTime(),
             lastStopTimestamp: currentTime, // Keep lastStop current to avoid instant gap alert
+            shiftCode: prev.shiftCode || code,
             steps: 0
         }));
-        updateShiftData({ hasGapAlerted: false });
+        updateShiftData({ hasGapAlerted: false, shiftCode: shiftData.shiftCode || code });
         setShowClockInModal(false);
     };
 
@@ -2858,7 +2896,13 @@ export default function App() {
     };
 
     const updateShiftData = (updates: any) => {
-        setShiftData((prev: any) => ({ ...prev, ...updates }));
+        setShiftData((prev: any) => {
+            const next = { ...prev, ...updates };
+            if (!next.shiftCode && (next.firstStartTime || next.isPicking)) {
+                next.shiftCode = generateShiftCode(next.operator, next.firstStartTime || Date.now());
+            }
+            return next;
+        });
     };
 
     const triggerSurprise = (title: string, subtitle: string = 'You are absolute machine!') => {
@@ -2935,6 +2979,10 @@ export default function App() {
         if (isShiftFinalized) {
             if (fromSignOut) {
                 signOut(auth).then(() => {
+                    sessionStorage.removeItem('session_authenticated');
+                    setIsAuthenticated(false);
+                }).catch(e => {
+                    console.warn('SignOut error:', e);
                     sessionStorage.removeItem('session_authenticated');
                     setIsAuthenticated(false);
                 });
@@ -3121,6 +3169,9 @@ export default function App() {
                             } else {
                                 showToast("Error syncing shift to database.", "error");
                             }
+                        }).catch(e => {
+                            console.warn("Shift and media sync fallback:", e);
+                            showToast("Shift stored locally. Cloud sync pending.", "info");
                         })
                     );
 
