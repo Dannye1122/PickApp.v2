@@ -313,8 +313,8 @@ export const clearLeaderboard = async () => {
 export const updateLiveStatus = async (user: string, rate: number, department: string, isActive: boolean, stats?: { totalCases: number, activeSeconds: number, steps?: number, xp?: number, status?: 'picking' | 'idle' | 'break' | 'finished', targetRate?: number, currentOrder?: string, customStatus?: string, listeningTo?: string }) => {
   try {
     if (!user) return;
-    const uid = auth.currentUser?.uid || 'local';
-    const docId = `${user.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}_${uid.slice(0, 6)}`;
+    const safeUser = user.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+    const docId = `LIVE_${safeUser}`;
     const todayStr = getLocalDateString(new Date());
     
     if (!isActive || stats?.status === 'finished') {
@@ -322,15 +322,16 @@ export const updateLiveStatus = async (user: string, rate: number, department: s
         const liveRef = doc(db, 'leaderboard', docId);
         await deleteDoc(liveRef);
       } catch (e) {
-        // Will timeout anyway due to 1 hour grace in subscription
+        // Will timeout or delete offline
       }
+      syncManager.enqueue('liveStatus', { docId, user, name: user, type: 'live', isActive: false, status: 'finished' });
     } else {
-      syncManager.enqueue('liveStatus', {
+      const record = {
         docId,
-        user,
-        name: user, // Added for consistency
-        type: 'live', // Required for subscribeToLiveUsers filter
-        isActive: true, // Required for AdminDashboard filter
+        user: safeUser,
+        name: user.toUpperCase().trim(),
+        type: 'live',
+        isActive: true,
         rate,
         department,
         totalCases: stats?.totalCases || 0,
@@ -344,45 +345,81 @@ export const updateLiveStatus = async (user: string, rate: number, department: s
         listeningTo: stats?.listeningTo || '',
         warehouseId: currentWarehouseId,
         date: todayStr,
-        lastUpdate: serverTimestamp() // Explicitly set lastUpdate
-      });
+        lastUpdate: serverTimestamp()
+      };
+
+      // 1. Direct write to Firestore for instant live updates across devices
+      try {
+        const liveRef = doc(db, 'leaderboard', docId);
+        await setDoc(liveRef, record, { merge: true });
+      } catch (fErr) {
+        syncManager.enqueue('liveStatus', record);
+      }
     }
   } catch (error) {
     // Operation failed silently.
   }
 };
 
-const getLocalActiveUserRecord = () => {
+const getLocalActiveUsersRecords = (): any[] => {
+  const records: any[] = [];
+  const seenUsers = new Set<string>();
+
+  const checkAndAddUser = (uName: string) => {
+    if (!uName || uName.toUpperCase() === 'ADMIN') return;
+    const normalized = uName.toUpperCase().trim();
+    if (seenUsers.has(normalized)) return;
+
+    try {
+      const rawPickData = localStorage.getItem(`pickData_${normalized}`) || localStorage.getItem(`pickData_${uName}`);
+      if (rawPickData) {
+        const p = JSON.parse(rawPickData);
+        if ((p.isPicking || p.firstStartTime) && !p.isShiftFinalized) {
+          seenUsers.add(normalized);
+          records.push({
+            id: `LOCAL_${normalized}`,
+            name: normalized,
+            user: normalized,
+            type: 'live',
+            isActive: true,
+            rate: p.currentRate || p.casesPerHour || 0,
+            department: p.department || 'Ambient',
+            totalCases: p.totalCases || 0,
+            activeSeconds: p.activeSeconds || 0,
+            steps: p.steps || 0,
+            xp: p.xp || 0,
+            status: p.isOnBreak ? 'break' : 'picking',
+            targetRate: p.customTargetRate || 200,
+            currentOrder: p.currentOrder || '',
+            customStatus: p.customStatus || '',
+            lastUpdate: { seconds: Math.floor(Date.now() / 1000) },
+            isLocalUser: true
+          });
+        }
+      }
+    } catch (e) {}
+  };
+
+  const lastUser = localStorage.getItem('lastUser');
+  if (lastUser) checkAndAddUser(lastUser);
+
+  // Scan all keys in localStorage for active picker states
   try {
-    const lastUser = localStorage.getItem('lastUser');
-    if (!lastUser || lastUser.toUpperCase() === 'ADMIN') return null;
-    const rawPickData = localStorage.getItem(`pickData_${lastUser}`);
-    if (rawPickData) {
-      const p = JSON.parse(rawPickData);
-      if ((p.isPicking || p.firstStartTime) && !p.isShiftFinalized) {
-        return {
-          id: `LOCAL_${lastUser.toUpperCase()}`,
-          name: lastUser.toUpperCase(),
-          user: lastUser.toUpperCase(),
-          type: 'live',
-          isActive: true,
-          rate: p.currentRate || p.casesPerHour || 0,
-          department: p.department || 'Ambient',
-          totalCases: p.totalCases || 0,
-          activeSeconds: p.activeSeconds || 0,
-          steps: p.steps || 0,
-          xp: p.xp || 0,
-          status: p.isOnBreak ? 'break' : 'picking',
-          targetRate: p.customTargetRate || 200,
-          currentOrder: p.currentOrder || '',
-          customStatus: p.customStatus || '',
-          lastUpdate: { seconds: Math.floor(Date.now() / 1000) },
-          isLocalUser: true
-        };
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('pickData_')) {
+        const userFromKey = key.replace('pickData_', '');
+        checkAndAddUser(userFromKey);
       }
     }
   } catch (e) {}
-  return null;
+
+  return records;
+};
+
+const getLocalActiveUserRecord = () => {
+  const list = getLocalActiveUsersRecords();
+  return list.length > 0 ? list[0] : null;
 };
 
 export const fetchLiveUsers = async (warehouseId: string, force: boolean = false): Promise<any[]> => {
@@ -391,11 +428,14 @@ export const fetchLiveUsers = async (warehouseId: string, force: boolean = false
     if (!canFetchData(cacheKey, force)) {
       const cached = getCachedData<any[]>(cacheKey);
       if (cached && cached.length > 0) {
-        const localUser = getLocalActiveUserRecord();
-        if (localUser && !cached.some((u: any) => (u.name || '').toUpperCase() === localUser.name)) {
-          return [localUser, ...cached];
-        }
-        return cached;
+        const localUsers = getLocalActiveUsersRecords();
+        const merged = [...cached];
+        localUsers.forEach(lu => {
+          if (!merged.some((u: any) => (u.name || '').toUpperCase().trim() === lu.name)) {
+            merged.unshift(lu);
+          }
+        });
+        return merged;
       }
     }
 
@@ -410,8 +450,9 @@ export const fetchLiveUsers = async (warehouseId: string, force: boolean = false
         ...(doc.data() as any)
       } as any));
 
-      const fiveMinutesAgoMs = Date.now() - 300000;
+      const twelveHoursAgoMs = Date.now() - 43200000; // Active shift window (12 hrs)
       const recentUsers = rawUsers.filter(u => {
+        if (u.isActive === false || u.status === 'finished') return false;
         if (warehouseId && warehouseId.toUpperCase() !== 'ALL' && u.warehouseId && u.warehouseId.toUpperCase() !== warehouseId.toUpperCase()) {
           return false;
         }
@@ -429,7 +470,7 @@ export const fetchLiveUsers = async (warehouseId: string, force: boolean = false
             }
         }
         
-        return updateMs >= fiveMinutesAgoMs;
+        return updateMs >= twelveHoursAgoMs;
       });
 
       // De-duplicate by name (most recent update wins)
@@ -442,11 +483,13 @@ export const fetchLiveUsers = async (warehouseId: string, force: boolean = false
         }
       });
 
-      // Guarantee local user presence if actively on shift
-      const localUser = getLocalActiveUserRecord();
-      if (localUser && !uniqueUsers[localUser.name]) {
-        uniqueUsers[localUser.name] = localUser;
-      }
+      // Guarantee local active users (current user + MIABRUDAN or others on shift) are included
+      const localUsers = getLocalActiveUsersRecords();
+      localUsers.forEach(lu => {
+        if (!uniqueUsers[lu.name]) {
+          uniqueUsers[lu.name] = lu;
+        }
+      });
 
       const liveBots = getDailyAILiveUsers();
       const uniqueUsersList = [...Object.values(uniqueUsers), ...liveBots];
@@ -456,12 +499,15 @@ export const fetchLiveUsers = async (warehouseId: string, force: boolean = false
       handleFirestoreError(error, OperationType.LIST, 'leaderboard');
       const cached = getCachedData<any[]>(cacheKey) || [];
       const liveBots = getDailyAILiveUsers();
-      const fallbackList = cached.length > 0 ? [...cached] : [...liveBots];
-      const localUser = getLocalActiveUserRecord();
-      if (localUser && !fallbackList.some((u: any) => (u.name || '').toUpperCase() === localUser.name)) {
-        fallbackList.unshift(localUser);
-      }
-      return fallbackList;
+      const fallbackList = cached.length > 0 ? [...cached] : [];
+      const localUsers = getLocalActiveUsersRecords();
+      localUsers.forEach(lu => {
+        if (!fallbackList.some((u: any) => (u.name || '').toUpperCase().trim() === lu.name)) {
+          fallbackList.unshift(lu);
+        }
+      });
+      const combined = [...fallbackList, ...liveBots];
+      return combined;
     }
 };
 
