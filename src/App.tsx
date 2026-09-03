@@ -48,6 +48,7 @@ import { PreviousMonthSummary } from './components/leaderboard/PreviousMonthSumm
 import { shouldPromptBetaSurvey } from './services/betaSurveyService';
 import { BreakPolicyModal } from './components/modals/BreakPolicyModal';
 import { checkMonthlyReportNotification } from './services/monthlyReportService';
+import { RECOVERED_SHIFT_20260902 } from './data/recoveredShift_20260902';
 import { shiftDataService } from './services/shiftDataService';
 import { shiftCacheService } from './services/shiftCacheService';
 import { generateFullShiftReport, copyFullShiftReport, restoreShiftFromReportText } from './services/shiftReportService';
@@ -819,7 +820,7 @@ export default function App() {
             return false;
         };
 
-        const combinedRemote = [...shiftSummaries, ...adminAllSummaries];
+        const combinedRemote = [...shiftSummaries, ...adminAllSummaries, RECOVERED_SHIFT_20260902];
         const uniqueRemote = new Map<string, any>();
         combinedRemote.forEach(item => {
             const key = item.id || (item.clockInTime ? `${item.userName || item.operator}_${item.clockInTime}` : `${item.userName || item.operator}_${item.date}`);

@@ -30,6 +30,7 @@ import { UserRole, UserProfile } from '../types';
 import { getDailyAIBots, getDailyAILiveUsers } from '../utils/botGenerator';
 import { getUserHomeDepartment } from '../constants/data';
 import { evaluateRosterInactivity } from './inactivityAutoDeactivate';
+import { RECOVERED_SHIFT_20260902 } from '../data/recoveredShift_20260902';
 
 export enum OperationType {
   CREATE = 'create',
@@ -1102,6 +1103,9 @@ export const fetchShiftSummaries = async (userName: string, force: boolean = fal
         } catch(e) {}
         
         const combinedLocal = [...localSummaries, ...idbShifts];
+        if (safeName === 'DASERGHIE' || safeName.includes('DASERGHIE')) {
+            combinedLocal.push(RECOVERED_SHIFT_20260902);
+        }
 
         const merged = [...summaries];
         combinedLocal.forEach((local: any) => {
