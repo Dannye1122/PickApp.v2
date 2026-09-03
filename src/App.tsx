@@ -2661,7 +2661,7 @@ export default function App() {
                 labelImages: currentImages,
                 storeLabel: entry.storeLabel || shiftData.storeLabel || "",
                 clockInTime: shiftStart,
-                clockOutTime: Date.now()
+                isOngoing: true
             });
         } catch (e) {
             saveSuccess = false;

@@ -537,6 +537,7 @@ export interface ShiftSummary {
   timestamp: any;
   notes?: string;
   operatorNote?: string;
+  isOngoing?: boolean;
 }
 
 export const deleteShiftSummary = async (docId: string, userName: string, clockInTime?: number) => {
@@ -651,16 +652,22 @@ export const saveShiftSummary = async (summary: Omit<ShiftSummary, 'timestamp' |
     const summaryDocRef = doc(summaryRef, docId);
     
     const loginDate = getLocalDateString(new Date(baseTime));
-    const derivedClockOut = summary.clockOutTime || (baseTime && (summary.totalSeconds || summary.activeSeconds) ? baseTime + Math.round((summary.totalSeconds || summary.activeSeconds || 0) * 1000) : Date.now());
+    const isOngoing = !!summary.isOngoing;
+    const derivedClockOut = isOngoing ? undefined : (summary.clockOutTime || (baseTime && (summary.totalSeconds || summary.activeSeconds) ? baseTime + Math.round((summary.totalSeconds || summary.activeSeconds || 0) * 1000) : Date.now()));
     
-    const summaryData = {
+    const summaryData: any = {
       ...summary,
       userName: safeName,
       clockInTime: baseTime,
-      clockOutTime: derivedClockOut,
       date: loginDate,
-      userId: uid
+      userId: uid,
+      isOngoing
     };
+    if (derivedClockOut) {
+      summaryData.clockOutTime = derivedClockOut;
+    } else {
+      delete summaryData.clockOutTime;
+    }
     
     try {
         const localKey = `shift_history_${safeName}`;

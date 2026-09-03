@@ -251,6 +251,7 @@ export interface ShiftSummary {
   notes?: string;
   operatorNote?: string;
   timestamp?: any;
+  isOngoing?: boolean;
 }
 
 

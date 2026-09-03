@@ -130,22 +130,53 @@ export const HistoricalShiftModal: React.FC<HistoricalShiftModalProps> = ({
                         const targetTotalSec = ((viewingPastSummary.totalCases || 0) / targetRateVal) * 3600;
                         const netSavedSecs = Math.round(targetTotalSec - derivedActiveSecs);
 
+                        const isCurrentlyActive = Boolean(
+                            viewingPastSummary.isOngoing ||
+                            (!viewingPastSummary.clockOutTime && shiftData.firstStartTime && !shiftData.isShiftFinalized) ||
+                            (!shiftData.isShiftFinalized &&
+                             shiftData.firstStartTime &&
+                             viewingPastSummary.clockInTime &&
+                             Math.abs(viewingPastSummary.clockInTime - shiftData.firstStartTime) < 5000 &&
+                             (viewingPastSummary.userName || '').toUpperCase().trim() === (shiftData.operator || '').toUpperCase().trim())
+                        );
+
                         return (
                             <>
                                 {/* Shift Logistics/Timings */}
                                 <div>
-                                    <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">Shift Timeline & Logistics</h4>
+                                    <div className="flex justify-between items-center mb-3">
+                                        <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Shift Timeline & Logistics</h4>
+                                        {isCurrentlyActive && (
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-[9px] font-black tracking-wider text-emerald-400 animate-pulse">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                                                LIVE (IN PROGRESS)
+                                            </span>
+                                        )}
+                                    </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="bg-slate-950/50 p-3 rounded-2xl border border-slate-800/80">
                                             <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Clock size={10}/> Clock In</div>
                                             <div className="text-lg font-black text-white">{viewingPastSummary.clockInTime ? new Date(viewingPastSummary.clockInTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--:--'}</div>
                                         </div>
-                                        <div className="bg-slate-950/50 p-3 rounded-2xl border border-slate-800/80">
-                                            <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5"><LogOut size={10}/> Clock Out</div>
-                                            <div className="text-lg font-black text-white">{viewingPastSummary.clockOutTime ? new Date(viewingPastSummary.clockOutTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--:--'}</div>
+                                        <div className={`p-3 rounded-2xl border transition-colors ${isCurrentlyActive ? 'bg-emerald-950/20 border-emerald-500/30' : 'bg-slate-950/50 border-slate-800/80'}`}>
+                                            <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                                                <LogOut size={10}/> Clock Out
+                                            </div>
+                                            {isCurrentlyActive ? (
+                                                <div className="flex items-center gap-1.5 mt-0.5">
+                                                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                                                    <span className="text-sm font-black text-emerald-400 tracking-wider">IN PROGRESS</span>
+                                                </div>
+                                            ) : (
+                                                <div className="text-lg font-black text-white">
+                                                    {viewingPastSummary.clockOutTime ? new Date(viewingPastSummary.clockOutTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--:--'}
+                                                </div>
+                                            )}
                                         </div>
                                         <div className="bg-slate-950/50 p-3 rounded-2xl border border-slate-800/80">
-                                            <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Activity size={10}/> Gross Length</div>
+                                            <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                                                <Activity size={10}/> {isCurrentlyActive ? 'Current Length' : 'Gross Length'}
+                                            </div>
                                             <div className="text-lg font-black text-white">{formatHHMM(derivedTotalSecs)}</div>
                                         </div>
                                         <div className={`bg-slate-950/50 p-3 rounded-2xl border ${viewingPastSummary.isBreakModified ? 'border-amber-500/50' : 'border-slate-800/80'}`}>

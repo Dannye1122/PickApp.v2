@@ -385,12 +385,16 @@ export const RotaModal: React.FC<RotaModalProps> = ({
 
                       const hasWorked = (actualHours !== null && actualHours > 0) || !!matchingSummary;
                       const override = shiftData.rotaOverrides?.[dStr];
+                      const isLiveShiftDay = isToday && shiftData.firstStartTime && !shiftData.isShiftFinalized;
                       
-                      let ringClass = isToday ? 'ring-2 ring-sky-500' : '';
+                      let ringClass = isToday ? (isLiveShiftDay ? 'ring-2 ring-emerald-400' : 'ring-2 ring-sky-500') : '';
                       let cellStyle = 'bg-slate-800/50 border border-slate-700';
                       let textStyle = 'text-slate-400';
                       
-                      if (hasWorked) {
+                      if (isLiveShiftDay) {
+                        cellStyle = 'bg-emerald-500/15 border border-emerald-500/50 shadow-inner shadow-emerald-950/40';
+                        textStyle = 'text-emerald-300 font-black';
+                      } else if (hasWorked) {
                         cellStyle = 'bg-sky-500/10 border border-sky-500/40 shadow-inner';
                         textStyle = 'text-sky-300 font-extrabold';
                       } else if (override && override !== 'work') {
@@ -433,7 +437,24 @@ export const RotaModal: React.FC<RotaModalProps> = ({
                                   const activeStart = shiftData.firstStartTime;
                                   const activeEnd = Date.now();
                                   if (Math.max(activeStart, targetDayStart) < Math.min(activeEnd, targetDayEnd)) {
-                                    announce("This shift is currently active! Finalize your shift to view the full detail report.");
+                                    // Generate a live snapshot summary for the active shift
+                                    const liveSnapshot = {
+                                      userName: shiftData.operator || "Unknown",
+                                      department: shiftData.department || "Aisles",
+                                      zone: shiftData.zone || "Zone A",
+                                      totalCases: shiftData.totalCases || 0,
+                                      finalRate: shiftData.currentRate || 0,
+                                      activeSeconds: shiftData.activeTime || 0,
+                                      totalSeconds: Math.max(0, Math.floor((Date.now() - activeStart) / 1000)),
+                                      breakSeconds: shiftData.totalExcludedTime || 0,
+                                      steps: shiftData.steps || 0,
+                                      date: dStr,
+                                      history: shiftData.history || [],
+                                      storeLabel: shiftData.storeLabel || "",
+                                      clockInTime: activeStart,
+                                      isOngoing: true
+                                    };
+                                    setViewingPastSummary(liveSnapshot);
                                   } else {
                                     announce("No detailed summary found for this shift.");
                                   }
@@ -523,17 +544,37 @@ export const RotaModal: React.FC<RotaModalProps> = ({
                     } else {
                       dt = new Date();
                     }
+                    const isOngoingShift = Boolean(
+                      summary.isOngoing ||
+                      (!summary.clockOutTime && shiftData.firstStartTime && !shiftData.isShiftFinalized) ||
+                      (!shiftData.isShiftFinalized &&
+                       shiftData.firstStartTime &&
+                       summary.clockInTime &&
+                       Math.abs(summary.clockInTime - shiftData.firstStartTime) < 5000 &&
+                       (summary.userName || '').toUpperCase().trim() === (shiftData.operator || '').toUpperCase().trim())
+                    );
+
                     return (
-                      <div key={`hist-${idx}`} className="bg-slate-900/60 p-4 rounded-2xl border border-slate-800 flex flex-col gap-3 hover:border-slate-700 transition-colors">
+                      <div key={`hist-${idx}`} className={`p-4 rounded-2xl border flex flex-col gap-3 transition-colors ${isOngoingShift ? 'bg-slate-900/90 border-emerald-500/40 shadow-lg shadow-emerald-950/20' : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'}`}>
                         <div className="flex justify-between items-center pb-2 border-b border-slate-800">
                           <div>
-                            <div className="font-extrabold text-xs text-slate-200">
+                            <div className="font-extrabold text-xs text-slate-200 flex items-center gap-2">
                               {dt.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
+                              {isOngoingShift && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-[9px] font-black tracking-wider text-emerald-400 animate-pulse">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                                  LIVE / IN PROGRESS
+                                </span>
+                              )}
                             </div>
-                            <div className="text-[10px] text-slate-400 font-mono mt-0.5 flex gap-2">
+                            <div className="text-[10px] text-slate-400 font-mono mt-0.5 flex gap-2 items-center">
                               <span>In: {summary.clockInTime ? new Date(summary.clockInTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--:--'}</span>
                               <span>•</span>
-                              <span>Out: {summary.clockOutTime ? new Date(summary.clockOutTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : (summary.clockInTime && summary.totalSeconds ? new Date(summary.clockInTime + summary.totalSeconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--:--')}</span>
+                              <span>Out: {isOngoingShift ? (
+                                <span className="text-emerald-400 font-bold">In Progress</span>
+                              ) : (
+                                summary.clockOutTime ? new Date(summary.clockOutTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : (summary.clockInTime && summary.totalSeconds ? new Date(summary.clockInTime + summary.totalSeconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--:--')
+                              )}</span>
                             </div>
                           </div>
                         </div>
