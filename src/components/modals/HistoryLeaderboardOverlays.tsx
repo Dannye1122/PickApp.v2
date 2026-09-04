@@ -79,6 +79,7 @@ export interface HistoryLeaderboardOverlaysProps {
     // Admin PIN Modal
     pinModal: { show: boolean; type: 'clear_db' | 'view_secret_logs' | 'adjust_rota' | ''; input: string };
     setPinModal: React.Dispatch<React.SetStateAction<{ show: boolean; type: 'clear_db' | 'view_secret_logs' | 'adjust_rota' | ''; input: string }>>;
+    onActiveSessionRestored?: (snapshotData: any) => void;
 }
 
 export const HistoryLeaderboardOverlays: React.FC<HistoryLeaderboardOverlaysProps> = ({
@@ -135,7 +136,8 @@ export const HistoryLeaderboardOverlays: React.FC<HistoryLeaderboardOverlaysProp
     setEditingOrderLabel,
     handleSavePastOrderLabel,
     pinModal,
-    setPinModal
+    setPinModal,
+    onActiveSessionRestored
 }) => {
     return (
         <>
@@ -259,6 +261,7 @@ export const HistoryLeaderboardOverlays: React.FC<HistoryLeaderboardOverlaysProp
                 setRestoreStatus={setRestoreStatus}
                 operator={shiftData.operator || 'DASERGHIE'}
                 onShiftRestored={(fresh) => setShiftSummaries(fresh)}
+                onActiveSessionRestored={onActiveSessionRestored}
             />
 
             <AdminPinModal

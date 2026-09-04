@@ -332,6 +332,65 @@ export async function saveLocalActiveShift(operator: string, shiftData: any): Pr
 }
 
 /**
+ * Save a rolling shift snapshot safely into IndexedDB & localStorage
+ */
+export async function saveShiftSnapshot(operator: string, shiftData: any): Promise<void> {
+  if (!operator || !shiftData) return;
+  const opKey = operator.toUpperCase().trim();
+  const snapshotKey = `SNAPSHOTS_${opKey}`;
+  
+  try {
+    const existing = await getLocalItem<{ operator: string; snapshots: any[] }>(STORES.ACTIVE_SHIFTS, snapshotKey);
+    const snapshots = existing?.snapshots || [];
+    
+    const newSnapshot = {
+      timestamp: Date.now(),
+      shiftData: JSON.parse(JSON.stringify(shiftData))
+    };
+    
+    const updated = [newSnapshot, ...snapshots.filter(s => s && s.timestamp)].slice(0, 10);
+    
+    await saveLocalItem(STORES.ACTIVE_SHIFTS, {
+      operator: snapshotKey,
+      snapshots: updated,
+      updatedAt: Date.now()
+    });
+
+    try {
+      localStorage.setItem(`PICKAPP_SNAPSHOT_LATEST_${opKey}`, JSON.stringify(newSnapshot));
+    } catch (e) {}
+  } catch (err) {
+    console.warn('[IndexedDB] Failed to save shift snapshot:', err);
+  }
+}
+
+/**
+ * Get latest rolling shift snapshots for recovery
+ */
+export async function getShiftSnapshots(operator: string): Promise<any[]> {
+  if (!operator) return [];
+  const opKey = operator.toUpperCase().trim();
+  const snapshotKey = `SNAPSHOTS_${opKey}`;
+  
+  try {
+    const item = await getLocalItem<{ operator: string; snapshots: any[] }>(STORES.ACTIVE_SHIFTS, snapshotKey);
+    if (item && Array.isArray(item.snapshots) && item.snapshots.length > 0) {
+      return item.snapshots;
+    }
+  } catch (e) {}
+
+  try {
+    const rawLatest = localStorage.getItem(`PICKAPP_SNAPSHOT_LATEST_${opKey}`);
+    if (rawLatest) {
+      const parsed = JSON.parse(rawLatest);
+      return [parsed];
+    }
+  } catch (e) {}
+
+  return [];
+}
+
+/**
  * Get active ongoing shift from IndexedDB
  */
 export async function getLocalActiveShift(operator: string): Promise<any | null> {

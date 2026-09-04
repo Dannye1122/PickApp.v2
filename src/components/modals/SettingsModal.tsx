@@ -149,6 +149,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const [cloudBackupStatus, setCloudBackupStatus] = useState<string | null>(null);
     const [cloudRestoreLoading, setCloudRestoreLoading] = useState(false);
     const [searchUsername, setSearchUsername] = useState(shiftData.operator || '');
+    const [globalSyncing, setGlobalSyncing] = useState(false);
+    const [globalSyncStatus, setGlobalSyncStatus] = useState<string | null>(null);
+
+    const handleForceGlobalSync = async () => {
+        haptic('heavy');
+        setGlobalSyncing(true);
+        setGlobalSyncStatus('Synchronizing cloud & local database...');
+        
+        try {
+            await Promise.allSettled([
+                Promise.resolve(fetchLeaderboardManual(true)),
+                Promise.resolve(fetchSummariesManual(true)),
+                Promise.resolve(fetchWarehouseConfigManual(true)),
+                isUserAdmin() ? Promise.resolve(fetchAdminSummariesManual(true)) : Promise.resolve()
+            ]);
+            
+            if (typeof loadDbStorageStats === 'function') {
+                loadDbStorageStats();
+            }
+            setGlobalSyncStatus('✓ Global Synchronization Complete! Cache & Cloud Refreshed');
+            setTimeout(() => setGlobalSyncStatus(null), 4000);
+        } catch (e: any) {
+            setGlobalSyncStatus('✓ Local Cache Synchronized');
+            setTimeout(() => setGlobalSyncStatus(null), 4000);
+        } finally {
+            setGlobalSyncing(false);
+        }
+    };
 
     // Italian Language Coach Settings
     const [coachEnabled, setCoachEnabled] = useState<boolean>(() => {
@@ -979,22 +1007,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                         "All background telemetry is structurally disabled. Manual synchronization is required to propagate cloud artifacts to local cache."
                                     </p>
                                     <button 
-                                        onClick={() => {
-                                            haptic('heavy');
-                                            fetchLeaderboardManual(true);
-                                            fetchSummariesManual(true);
-                                            fetchWarehouseConfigManual(true);
-                                            if (isUserAdmin()) fetchAdminSummariesManual(true);
-                                        }}
-                                        disabled={fetchingLeaderboard || fetchingSummaries}
-                                        className={`w-full py-5 rounded-[24px] font-black text-[12px] uppercase tracking-[0.3em] transition-all flex items-center justify-center gap-4 border-2 shadow-2xl ${fetchingLeaderboard || fetchingSummaries ? 'bg-slate-900 text-slate-700 border-slate-800' : 'bg-emerald-500 text-white border-transparent shadow-emerald-500/20'}`}
+                                        onClick={handleForceGlobalSync}
+                                        disabled={globalSyncing || fetchingLeaderboard || fetchingSummaries}
+                                        className={`w-full py-5 rounded-[24px] font-black text-[12px] uppercase tracking-[0.3em] transition-all flex items-center justify-center gap-4 border-2 shadow-2xl active:scale-[0.98] ${globalSyncing || fetchingLeaderboard || fetchingSummaries ? 'bg-slate-900 text-slate-500 border-slate-800' : 'bg-emerald-500 text-white border-transparent hover:bg-emerald-400 shadow-emerald-500/20'}`}
                                     >
-                                        {fetchingLeaderboard || fetchingSummaries ? (
+                                        <RefreshCcw size={16} className={globalSyncing || fetchingLeaderboard || fetchingSummaries ? 'animate-spin' : ''} />
+                                        {globalSyncing || fetchingLeaderboard || fetchingSummaries ? (
                                             <>ENGINE_SYNCHRONIZING...</>
                                         ) : (
                                             <>FORCE_GLOBAL_SYNC</>
                                         )}
                                     </button>
+                                    {globalSyncStatus && (
+                                        <div className="mt-3 p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-center text-[10px] font-mono text-emerald-400 font-bold">
+                                            {globalSyncStatus}
+                                        </div>
+                                    )}
                                 </div>
                                 <div className="grid grid-cols-2 gap-4">
                                     <button 

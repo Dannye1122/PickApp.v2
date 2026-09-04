@@ -37,7 +37,7 @@ import {
 } from './services/leaderboardService';
 import { 
     getLocalRota, saveLocalRota, getAllLocalItems, STORES, migrateLocalStorageToIndexedDB, 
-    saveLocalActiveShift, saveLocalNotification, getLocalNotifications, 
+    saveLocalActiveShift, saveShiftSnapshot, getShiftSnapshots, saveLocalNotification, getLocalNotifications, 
     markNotificationAsRead, markAllNotificationsAsRead, clearLocalNotifications,
     deleteLocalNotification
 } from './services/indexedDbService';
@@ -1468,6 +1468,20 @@ export default function App() {
         }
     }, [now, isPicking, isOnBreak, shiftData.lastStopTimestamp, shiftData.haptic, shiftData.firstStartTime, shiftData.lastGapAlertTimestamp]);
 
+    const shiftDataRef = useRef(shiftData);
+    shiftDataRef.current = shiftData;
+    const caseCountRef = useRef(caseCount);
+    caseCountRef.current = caseCount;
+    const lane1Ref = useRef(lane1);
+    lane1Ref.current = lane1;
+    const lane2Ref = useRef(lane2);
+    lane2Ref.current = lane2;
+    const lane3Ref = useRef(lane3);
+    lane3Ref.current = lane3;
+    const lane4Ref = useRef(lane4);
+    lane4Ref.current = lane4;
+
+    // Instant Zero-Delay Persistence + Lifecycle Pagehide / Visibilitychange Flush
     useEffect(() => {
         const dataToSave = {
             ...shiftData,
@@ -1478,31 +1492,75 @@ export default function App() {
             lane4
         };
         const rawJson = JSON.stringify(dataToSave);
+        const op = shiftData.operator || 'default';
+        const opKey = op ? op.toUpperCase().trim() : 'DEFAULT';
 
-        // Immediate synchronous crash recovery backup if shift is in progress
+        // 1. Synchronously save active shift and crash backup immediately
         if (shiftData.firstStartTime && !shiftData.isShiftFinalized) {
-            const opKey = shiftData.operator ? shiftData.operator.toUpperCase().trim() : 'DEFAULT';
             safeLocalStorage.setItem(`ACTIVE_SHIFT_CRASH_BACKUP_${opKey}`, rawJson, true);
             safeLocalStorage.setItem('ACTIVE_SHIFT_CRASH_BACKUP', rawJson, true);
         }
 
-        // Debounce storage writes by 3 seconds to protect mobile devices from high-frequency bridge overhead and disk lag
-        const handler = setTimeout(() => {
-            if (shiftData.operator) {
-                safeLocalStorage.setItem(`pickData_${shiftData.operator}`, rawJson, true);
-                safeLocalStorage.setItem('lastUser', shiftData.operator);
-                saveLocalActiveShift(shiftData.operator, dataToSave).catch(() => {});
-                Preferences.set({ key: `pickData_${shiftData.operator}`, value: rawJson }).catch(e => { /* Silently fail */ });
-                Preferences.set({ key: 'lastUser', value: shiftData.operator }).catch(e => { /* Silently fail */ });
-            } else {
-                safeLocalStorage.setItem('pickData', rawJson, true);
-                saveLocalActiveShift('default', dataToSave).catch(() => {});
-                Preferences.set({ key: 'pickData', value: rawJson }).catch(e => { /* Silently fail */ });
-            }
-        }, 3000);
+        safeLocalStorage.setItem(op !== 'default' ? `pickData_${op}` : 'pickData', rawJson, true);
+        safeLocalStorage.setItem('lastUser', op);
+        if (caseCount) {
+            safeLocalStorage.setItem('draft_caseCount', caseCount);
+        }
 
-        return () => clearTimeout(handler);
+        // 2. Async backup into IndexedDB & Capacitor Preferences
+        saveLocalActiveShift(op, dataToSave).catch(() => {});
+        Preferences.set({ key: `pickData_${op}`, value: rawJson }).catch(() => {});
+        Preferences.set({ key: 'lastUser', value: op }).catch(() => {});
+
+        // 3. Save rolling snapshot whenever break or order state transitions occur
+        if (shiftData.isOnBreak || shiftData.isPicking || shiftData.history?.length > 0) {
+            saveShiftSnapshot(op, dataToSave).catch(() => {});
+        }
     }, [shiftData, caseCount, lane1, lane2, lane3, lane4]);
+
+    useEffect(() => {
+        const handleFlushOnHide = () => {
+            const curShift = shiftDataRef.current;
+            const curOp = curShift.operator || 'default';
+            const opKey = curOp ? curOp.toUpperCase().trim() : 'DEFAULT';
+            const dataToSave = {
+                ...curShift,
+                caseCount: caseCountRef.current,
+                lane1: lane1Ref.current,
+                lane2: lane2Ref.current,
+                lane3: lane3Ref.current,
+                lane4: lane4Ref.current
+            };
+            const rawJson = JSON.stringify(dataToSave);
+            
+            safeLocalStorage.setItem(curOp !== 'default' ? `pickData_${curOp}` : 'pickData', rawJson, true);
+            safeLocalStorage.setItem('lastUser', curOp);
+            if (curShift.firstStartTime && !curShift.isShiftFinalized) {
+                safeLocalStorage.setItem(`ACTIVE_SHIFT_CRASH_BACKUP_${opKey}`, rawJson, true);
+                safeLocalStorage.setItem('ACTIVE_SHIFT_CRASH_BACKUP', rawJson, true);
+            }
+            if (caseCountRef.current) {
+                safeLocalStorage.setItem('draft_caseCount', caseCountRef.current);
+            }
+            saveLocalActiveShift(curOp, dataToSave).catch(() => {});
+            saveShiftSnapshot(curOp, dataToSave).catch(() => {});
+            Preferences.set({ key: `pickData_${curOp}`, value: rawJson }).catch(() => {});
+        };
+
+        const onVisChange = () => {
+            if (document.visibilityState === 'hidden') {
+                handleFlushOnHide();
+            }
+        };
+
+        window.addEventListener('visibilitychange', onVisChange);
+        window.addEventListener('pagehide', handleFlushOnHide);
+
+        return () => {
+            window.removeEventListener('visibilitychange', onVisChange);
+            window.removeEventListener('pagehide', handleFlushOnHide);
+        };
+    }, []);
 
     useEffect(() => {
         const draftL1 = localStorage.getItem('draft_lane1');
@@ -1534,14 +1592,17 @@ export default function App() {
     const [fetchingSummaries, setFetchingSummaries] = useState(false);
 
     const fetchLeaderboardManual = useCallback(async (force: boolean = false) => {
-        if (!firebaseUser) return;
         setFetchingLeaderboard(true);
         try {
             const warehouseId = shiftData.warehouseId || 'MAIN';
             const entries = await fetchLeaderboard(warehouseId, force);
-            setLeaderboardData(entries);
+            if (entries && entries.length > 0) {
+                setLeaderboardData(entries);
+            }
             const live = await fetchLiveUsers(warehouseId);
-            setLiveUsers(live);
+            if (live && live.length > 0) {
+                setLiveUsers(live);
+            }
             
             // Also fetch all shift summaries for historical month breakdown
             fetchAllShiftSummaries(force).then(allSummaries => {
@@ -1554,30 +1615,34 @@ export default function App() {
         } finally {
             setFetchingLeaderboard(false);
         }
-    }, [shiftData.warehouseId, firebaseUser?.uid]);
+    }, [shiftData.warehouseId]);
 
     const fetchSummariesManual = useCallback(async (force: boolean = false) => {
-        if (!shiftData.operator || !firebaseUser) return;
+        const opName = shiftData.operator || localStorage.getItem('lastUser') || 'DASERGHIE';
         setFetchingSummaries(true);
         try {
-            const summaries = await fetchShiftSummaries(shiftData.operator, force);
-            setShiftSummaries(summaries);
+            const summaries = await fetchShiftSummaries(opName, force);
+            if (summaries && summaries.length > 0) {
+                setShiftSummaries(summaries);
+            }
         } catch (e) {
             console.warn('fetchSummariesManual background load:', e);
         } finally {
             setFetchingSummaries(false);
         }
-    }, [shiftData.operator, firebaseUser?.uid]);
+    }, [shiftData.operator]);
 
     const fetchAdminSummariesManual = useCallback(async (force: boolean = false) => {
-        if (!isUserAdmin() || !firebaseUser) return;
+        if (!isUserAdmin()) return;
         try {
             const summaries = await fetchAllShiftSummaries(force);
-            setAdminAllSummaries(summaries);
+            if (summaries && summaries.length > 0) {
+                setAdminAllSummaries(summaries);
+            }
         } catch (e) {
             console.warn('fetchAdminSummariesManual background load:', e);
         }
-    }, [firebaseUser?.uid, userProfile]);
+    }, [userProfile]);
 
     // Background Auto-Refresh to sync Leaderboard and statistics within Quota Guardian guidelines
     useEffect(() => {
@@ -3129,11 +3194,7 @@ export default function App() {
                     }
 
                     // 2b. Save full Shift Summary (Private/Permanent)
-                    // Save CSV immediately as well
                     const fileDateISO = new Date(finalTimestamp).toISOString().split('T')[0];
-                    const csvContent = "sep=,\n" + `"SUMMARY TYPE","DATA"\n` + `"Operator","${currentName}"\n` + `"Date","${logDate}"\n` + `"Total Cases","${currentCases}"\n` + `"Rate","${finalRate}"\n`;
-                    const fileName = `Work/${shiftStartDate.getFullYear()}/${(shiftStartDate.getMonth() + 1).toString().padStart(2, '0')}/ShiftReport_${currentName}_${fileDateISO.replace(/-/g, '')}.csv`;
-                    deviceExport(csvContent, fileName, true); // Keep original, this just adds the CSV save locally
                     // Export all images from the shift's history to the device
                     let imageExportCounter = 1;
                     if (shiftData.history && shiftData.history.length > 0) {
@@ -3385,7 +3446,28 @@ export default function App() {
                 setIsAuthenticated(false);
             }
             
-            // --- endShift completed ---
+            // --- Execute App Exit / Close ---
+            try {
+                const { App: CapApp } = await import('@capacitor/app');
+                if (CapApp && typeof CapApp.exitApp === 'function') {
+                    await CapApp.exitApp();
+                }
+            } catch (e) {
+                /* Not in native Capacitor runtime */
+            }
+
+            try {
+                window.close();
+            } catch (e) {}
+
+            // Fallback for standalone web or tab navigation
+            setTimeout(() => {
+                if (!window.closed) {
+                    try {
+                        window.location.href = "about:blank";
+                    } catch (e) {}
+                }
+            }, 300);
         } catch (e) {
             // End shift failure.
             setConfirmDialog({
@@ -3899,6 +3981,22 @@ export default function App() {
                         handleSavePastOrderLabel={handleSavePastOrderLabel}
                         pinModal={pinModal}
                         setPinModal={setPinModal}
+                        onActiveSessionRestored={(snapshotData) => {
+                            if (!snapshotData) return;
+                            haptic('heavy');
+                            setShiftData((prev: any) => ({
+                                ...prev,
+                                ...snapshotData,
+                                operator: snapshotData.operator || prev.operator
+                            }));
+                            if (snapshotData.caseCount !== undefined) setCaseCount(snapshotData.caseCount);
+                            if (snapshotData.lane1 !== undefined) setLane1(snapshotData.lane1);
+                            if (snapshotData.lane2 !== undefined) setLane2(snapshotData.lane2);
+                            if (snapshotData.lane3 !== undefined) setLane3(snapshotData.lane3);
+                            if (snapshotData.lane4 !== undefined) setLane4(snapshotData.lane4);
+                            if (snapshotData.operatorNote !== undefined) setShiftNotes(snapshotData.operatorNote);
+                            showToast('Active Shift Session Snapshot Restored!', 'success');
+                        }}
                     />
                 {activeScreen === 1 && (
                     <div id="screen-performance" className="h-full flex flex-col">

@@ -1,9 +1,10 @@
 /**
- * PickApp Quota Guardian
- * Enforces a 10-minute read-lock on all database requests to stay within free-tier limits.
+ * PickApp Quota Guardian & Target Allocator
+ * Actively calibrates database traffic to target 80% - 90% daily free tier utilization
+ * (~40,000 - 45,000 reads/day) for high-frequency live updates without exceeding quota limits.
  */
 
-const TEN_MINUTES_MS = 20 * 60 * 1000;
+const STANDARD_CACHE_MS = 3 * 60 * 1000; // 3-minute default cache for standard metadata
 
 /**
  * Retrieves the count of currently active/live users from the local cache.
@@ -29,41 +30,41 @@ const getLiveUsersCount = (): number => {
     return 1;
 };
 
-/**
- * Calculates the dynamically optimized polling interval for live updates.
- * Adapts to the number of live users to keep total daily reads safely under the 50,000 Free Tier limit.
- * 1 user  -> 60s (1m)
- * 2 users -> 90s (1.5m)
- * 3 users -> 120s (2m)
- * 4 users -> 180s (3m)
- * 5 users -> 240s (4m)
- * >5 users -> scales up to 10 minutes max (600s)
- */
-export const getOptimalLiveInterval = (): number => {
-    const liveUsers = getLiveUsersCount();
-    
-    let intervalSec = 60;
-    if (liveUsers === 2) {
-        intervalSec = 90;
-    } else if (liveUsers === 3) {
-        intervalSec = 120;
-    } else if (liveUsers === 4) {
-        intervalSec = 180;
-    } else if (liveUsers === 5) {
-        intervalSec = 240;
-    } else if (liveUsers > 5) {
-        intervalSec = Math.min(600, liveUsers * 60);
-    }
-    
-    return intervalSec * 1000;
-};
-
 export const DAILY_READ_LIMIT = 50000;
 export const DAILY_WRITE_LIMIT = 20000;
-export const QUOTA_CAP_RATIO = 0.80; // 80% strict cap for non-essential traffic
+export const TARGET_QUOTA_RATIO = 0.88; // Target 88% daily usage (~44,000 reads)
 
-export const BUDGETED_READ_MAX = Math.floor(DAILY_READ_LIMIT * QUOTA_CAP_RATIO); // 40,000 reads
-export const BUDGETED_WRITE_MAX = Math.floor(DAILY_WRITE_LIMIT * QUOTA_CAP_RATIO); // 16,000 writes
+export const BUDGETED_READ_MAX = Math.floor(DAILY_READ_LIMIT * TARGET_QUOTA_RATIO); // 44,000 reads target
+export const BUDGETED_WRITE_MAX = Math.floor(DAILY_WRITE_LIMIT * TARGET_QUOTA_RATIO); // 17,600 writes target
+
+/**
+ * Calculates dynamically optimized polling interval for live updates.
+ * Designed to utilize 80% to 90% of the daily free tier for maximum live responsiveness:
+ * - Healthy Budget (<80%): Refresh every 25s for ultra-fast live rank & presence tracking
+ * - Approaching Target (80-88%): Adaptively smooth interval (45s - 90s)
+ * - Near Target (>88%): Throttle to preserve headspace for shift completion
+ */
+export const getOptimalLiveInterval = (): number => {
+    const usage = getQuotaUsage();
+    const liveUsers = getLiveUsersCount();
+    
+    // Stage 1: Healthy budget (<80%) -> Maximize live update speed (25s - 45s)
+    if (usage.readPercent < 80) {
+        if (liveUsers <= 2) return 25 * 1000;
+        if (liveUsers <= 5) return 35 * 1000;
+        return 45 * 1000;
+    }
+    
+    // Stage 2: Target Band (80% - 88%) -> Smooth adaptive interval (60s - 90s)
+    if (usage.readPercent < 88) {
+        if (liveUsers <= 2) return 50 * 1000;
+        if (liveUsers <= 5) return 75 * 1000;
+        return 90 * 1000;
+    }
+
+    // Stage 3: Approaching 90% cap -> Throttle to 180s to preserve critical shift saves
+    return 180 * 1000;
+};
 
 let globalQuotaExceeded = false;
 
@@ -203,7 +204,7 @@ export const canFetchData = (cacheKey: string, force: boolean = false): boolean 
     const lastFetch = localStorage.getItem(`last_fetch_${cacheKey}`);
     if (!lastFetch) return true;
     
-    const interval = isLiveKey ? getOptimalLiveInterval() : TEN_MINUTES_MS;
+    const interval = isLiveKey ? getOptimalLiveInterval() : STANDARD_CACHE_MS;
     
     const elapsed = Date.now() - parseInt(lastFetch);
     return elapsed >= interval;
@@ -348,7 +349,7 @@ export const getMinutesUntilNextFetch = (cacheKey: string): number => {
     if (!lastFetch) return 0;
     
     const isLiveKey = cacheKey.startsWith('leaderboard_') || cacheKey.startsWith('liveusers_');
-    const interval = isLiveKey ? getOptimalLiveInterval() : TEN_MINUTES_MS;
+    const interval = isLiveKey ? getOptimalLiveInterval() : STANDARD_CACHE_MS;
     
     const elapsed = Date.now() - parseInt(lastFetch);
     const remainingMs = Math.max(0, interval - elapsed);
