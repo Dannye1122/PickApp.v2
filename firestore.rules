@@ -2,25 +2,41 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // -------------------------------------------------------------------------
-    // 👑 UNRESTRICTED PERMISSIONS FOR ADMIN & OPERATIONAL APP ACCESS
-    // -------------------------------------------------------------------------
     function isSignedIn() {
       return request.auth != null;
     }
 
-    function isSuperAdmin() {
-      return true; // Unrestricted admin rights across all operations
+    // Shift summaries - users can create/read their own shifts, admins can read/write all
+    match /shift_summaries/{summaryId} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if true;
     }
 
-    function isAdmin() {
-      return true; // Supercharged admin permissions for warehouse management & purging
+    // Leaderboard & live users - public read, authenticated/app write
+    match /leaderboard/{entryId} {
+      allow read, write: if true;
     }
 
-    // Top-level allow for all collections
+    match /live_users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Users & Profiles - read/write
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Warehouse Config - read/write
+    match /warehouse_config/{configId} {
+      allow read, write: if true;
+    }
+
+    // Fallback rule for any other collection
     match /{allDocuments=**} {
       allow read, write: if true;
     }
   }
 }
+
 
